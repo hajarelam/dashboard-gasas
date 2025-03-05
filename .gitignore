@@ -1,0 +1,16 @@
+# Configuration et secrets
+config.py
+.env
+.streamlit/secrets.toml
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environnement virtuel
+venv/
+env/
+
+# Fichiers système
+.DS_Store 
