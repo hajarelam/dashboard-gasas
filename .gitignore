@@ -1,6 +1,7 @@
 # Configuration et secrets
 config.py
 .env
+.streamlit/
 .streamlit/secrets.toml
 
 # Cache Python
@@ -13,4 +14,14 @@ venv/
 env/
 
 # Fichiers système
-.DS_Store 
+.DS_Store
+Thumbs.db
+
+# Fichiers IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log 
