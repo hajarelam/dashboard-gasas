@@ -11,28 +11,28 @@ ksaar_config = st.secrets["ksaar_config"]
 def check_password():
     """Retourne `True` si l'utilisateur a entré le bon mot de passe."""
     
-    # Initialisation des variables de session si elles n'existent pas
-    if "password_correct" not in st.session_state:
-        st.session_state["password_correct"] = False
+    # Vérifier si l'utilisateur est déjà connecté avec une session valide
+    if 'authenticated' in st.session_state:
+        return True
     
-    if not st.session_state["password_correct"]:
-        st.title("Login")
+    # Afficher le formulaire de connexion
+    st.title("Login")
+    
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Login")
         
-        # Création d'un formulaire de login
-        with st.form("login_form"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            submit = st.form_submit_button("Login")
-            
-            if submit:
-                if username in credentials and password == credentials[username]:
-                    st.session_state["password_correct"] = True
-                    st.rerun()
-                else:
-                    st.error("😕 Identifiants incorrects")
-        return False
+        if submit:
+            if username in credentials and password == credentials[username]:
+                # Stocker l'authentification dans la session
+                st.session_state['authenticated'] = True
+                st.session_state['username'] = username
+                st.rerun()
+            else:
+                st.error("😕 Identifiants incorrects")
     
-    return True
+    return False
 
 def get_ksaar_data():
     """Récupère les données depuis l'API Ksaar."""
@@ -215,19 +215,26 @@ def generate_chat_report(chat_data):
 def main():
     st.set_page_config(**ksaar_config['app_config'])
     
-    # Ajouter un rafraîchissement automatique toutes les 5 minutes (300000 millisecondes)
-    st.markdown(
-        """
-        <meta http-equiv="refresh" content="300">
-        """,
-        unsafe_allow_html=True
-    )
+    # Supprimer le rafraîchissement automatique qui cause la déconnexion
+    # st.markdown("""<meta http-equiv="refresh" content="300">""", unsafe_allow_html=True)
     
     if check_password():
         st.title("Dashboard GASAS")
         
-        if st.sidebar.button("Déconnexion"):
-            st.session_state["password_correct"] = False
+        # Ajouter un bouton de rafraîchissement manuel
+        if st.sidebar.button("🔄 Rafraîchir les données"):
+            # Effacer le cache des données
+            if 'chat_data' in st.session_state:
+                del st.session_state['chat_data']
+            if 'calls_data' in st.session_state:
+                del st.session_state['calls_data']
+            st.rerun()
+        
+        # Ajouter le bouton de déconnexion
+        if st.sidebar.button("🚪 Déconnexion"):
+            # Effacer toutes les données de session
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
             st.rerun()
         
         # Sélecteur pour choisir entre Chats et Appels
