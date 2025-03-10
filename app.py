@@ -449,6 +449,13 @@ def display_chats():
         st.warning("Aucune donnée n'a pu être récupérée.")
         return
     
+    # Champ de recherche
+    search_term = st.sidebar.text_input("Rechercher dans les messages", "")
+    
+    # Filtrer les messages en fonction du terme de recherche
+    if search_term:
+        df = df[df['messages'].str.contains(search_term, case=False, na=False)]
+    
     # Configuration des dates par défaut
     default_start_date = datetime(2025, 1, 1)
     default_end_date = datetime.now()
