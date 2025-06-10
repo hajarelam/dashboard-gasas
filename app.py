@@ -17,6 +17,38 @@ print(f"Python path: {sys.path}")
 credentials = st.secrets["credentials"]
 ksaar_config = st.secrets["ksaar_config"]
 
+
+# === AJOUT POUR ANALYSE ÉMOTIONNELLE, RÉSUMÉ ET CLUSTERING ===
+from textblob import TextBlob
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import KMeans
+from collections import Counter
+
+def analyze_sentiment(text):
+    blob = TextBlob(str(text))
+    polarity = blob.sentiment.polarity
+    if polarity > 0.3:
+        return "Positif"
+    elif polarity < -0.3:
+        return "Négatif"
+    else:
+        return "Neutre"
+
+def generate_simple_summary(messages):
+    user_msgs = extract_user_messages(messages)
+    if len(user_msgs) <= 5:
+        return "Résumé non généré (peu de messages)"
+    else:
+        return " ".join(user_msgs[:2]) + " [...] " + user_msgs[-1]
+
+def cluster_chats(df, n_clusters=5):
+    messages = df['messages'].fillna("").astype(str).tolist()
+    vectorizer = TfidfVectorizer(max_df=0.9, min_df=2, stop_words='french')
+    X = vectorizer.fit_transform(messages)
+    model = KMeans(n_clusters=n_clusters, random_state=42)
+    df['Thème'] = model.fit_predict(X)
+    return df
+
 def check_password():
     """Retourne `True` si l'utilisateur a entré le bon mot de passe."""
     
@@ -260,6 +292,8 @@ def get_volunteer_location(operator_name):
     else:
         return "Autre"
 
+# Ajout du cache pour les données
+@st.cache_data(ttl=3600)  # Cache d'une heure
 def get_ksaar_data():
     """Récupère les données depuis l'API Ksaar avec le bon workflow ID."""
     try:
@@ -355,6 +389,7 @@ def get_ksaar_data():
         st.error(f"Erreur lors de la connexion à l'API: {str(e)}")
         return pd.DataFrame()
 
+@st.cache_data(ttl=3600)  # Cache d'une heure
 def get_calls_data():
     """Récupère les données d'appels depuis l'API Ksaar."""
     try:
@@ -477,6 +512,78 @@ def generate_chat_report(chat_data):
     """
     return html_template
 
+def generate_chat_report_txt(chat_data):
+    """Génère un rapport TXT pour un chat avec les informations d'antenne et de bénévole."""
+    # Récupérer l'antenne et la localisation du bénévole
+    antenne = chat_data.get('Antenne', 'Inconnue')
+    volunteer_location = chat_data.get('Volunteer_Location', 'Inconnu')
+    
+    # Créer le contenu du rapport en format texte
+    txt_content = f"""
+RAPPORT DE CHAT NIGHTLINE
+=========================
+
+ID Chat: {chat_data['id_chat']}
+IP: {chat_data['IP']}
+Date: {chat_data['Crée le'].strftime('%d/%m/%Y %H:%M')}
+Antenne: {antenne}
+Bénévole: {volunteer_location}
+
+INFORMATIONS SUPPLÉMENTAIRES
+===========================
+Temps d'attente: {chat_data['pnd_time'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['pnd_time']) else 'N/A'}
+Dernier message utilisateur: {chat_data['last_user_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_user_message']) else 'N/A'}
+Dernier message opérateur: {chat_data['last_op_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_op_message']) else 'N/A'}
+
+MESSAGES
+========
+{chat_data['messages']}
+"""
+    return txt_content
+
+def generate_chat_report_csv(chat_data):
+    """Génère un rapport CSV pour un chat avec les informations d'antenne et de bénévole."""
+    import io
+    import csv
+    
+    # Récupérer l'antenne et la localisation du bénévole
+    antenne = chat_data.get('Antenne', 'Inconnue')
+    volunteer_location = chat_data.get('Volunteer_Location', 'Inconnu')
+    
+    # Créer un buffer pour stocker les données CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Écrire les en-têtes
+    writer.writerow(['Champ', 'Valeur'])
+    
+    # Écrire les informations du chat
+    writer.writerow(['ID Chat', chat_data['id_chat']])
+    writer.writerow(['IP', chat_data['IP']])
+    writer.writerow(['Date', chat_data['Crée le'].strftime('%d/%m/%Y %H:%M')])
+    writer.writerow(['Antenne', antenne])
+    writer.writerow(['Bénévole', volunteer_location])
+    writer.writerow(['Temps d\'attente', chat_data['pnd_time'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['pnd_time']) else 'N/A'])
+    writer.writerow(['Dernier message utilisateur', chat_data['last_user_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_user_message']) else 'N/A'])
+    writer.writerow(['Dernier message opérateur', chat_data['last_op_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_op_message']) else 'N/A'])
+    
+    # Ajouter une ligne vide
+    writer.writerow([])
+    
+    # Écrire les messages
+    writer.writerow(['MESSAGES'])
+    
+    # Diviser les messages par ligne et les écrire
+    messages = str(chat_data['messages']).split('\n')
+    for message in messages:
+        writer.writerow([message])
+    
+    # Récupérer le contenu du buffer
+    csv_content = output.getvalue()
+    output.close()
+    
+    return csv_content
+
 def display_calls_filters():
     """Affiche les filtres pour les appels dans la sidebar avec support des antennes."""
     st.sidebar.header("Filtres des appels")
@@ -538,21 +645,41 @@ def display_calls_filters():
         }
     return None
 
+def display_pagination_controls(total_items, page_size, current_page):
+    total_pages = (total_items + page_size - 1) // page_size
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col1:
+        if current_page > 0:
+            if st.button("← Précédent"):
+                st.session_state.page_number = current_page - 1
+                st.rerun()
+    
+    with col2:
+        st.write(f"Page {current_page + 1} sur {total_pages}")
+    
+    with col3:
+        if current_page < total_pages - 1:
+            if st.button("Suivant →"):
+                st.session_state.page_number = current_page + 1
+                st.rerun()
+
 def display_calls():
-    """Affiche les données des appels avec support des antennes."""
-    df = get_calls_data()
+    if 'calls_page_number' not in st.session_state:
+        st.session_state.calls_page_number = 0
     
-    if df.empty:
-        st.warning("Aucune donnée d'appel n'a pu être récupérée.")
-        return
+    PAGE_SIZE = 50
     
-    # Récupérer les filtres
+    # Charger les données avec cache
+    data = get_calls_data()
+    
+    # Appliquer les filtres
     filters = display_calls_filters()
     if filters:
         # Application des filtres de date et statut
-        mask = (df['Crée le'].dt.date >= filters['start_date']) & \
-               (df['Crée le'].dt.date <= filters['end_date']) & \
-               (df['Statut'].isin(filters['statut']))
+        mask = (data['Crée le'].dt.date >= filters['start_date']) & \
+               (data['Crée le'].dt.date <= filters['end_date']) & \
+               (data['Statut'].isin(filters['statut']))
         
         # Convertir les heures en objets time pour la comparaison
         def convert_to_time(time_str):
@@ -564,75 +691,59 @@ def display_calls():
                 return None
         
         # Appliquer la conversion aux colonnes d'heure
-        df['Début appel_time'] = df['Début appel'].apply(convert_to_time)
-        df['Fin appel_time'] = df['Fin appel'].apply(convert_to_time)
+        data['Début appel_time'] = data['Début appel'].apply(convert_to_time)
+        data['Fin appel_time'] = data['Fin appel'].apply(convert_to_time)
         
         # Filtrer par heure
-        time_mask = pd.Series(True, index=df.index)
-        valid_times = df['Début appel_time'].notna() & df['Fin appel_time'].notna()
+        time_mask = pd.Series(True, index=data.index)
+        valid_times = data['Début appel_time'].notna() & data['Fin appel_time'].notna()
         
         if valid_times.any():
             # Gérer le cas où l'heure de début est après l'heure de fin (période nocturne)
             if filters['start_time'] > filters['end_time']:
                 # La plage horaire s'étend sur deux jours (ex: de 21:00 à 00:00)
                 time_mask = valid_times & (
-                    ((df['Début appel_time'] >= filters['start_time']) | 
-                     (df['Début appel_time'] <= filters['end_time'])) &
-                    ((df['Fin appel_time'] >= filters['start_time']) | 
-                     (df['Fin appel_time'] <= filters['end_time']))
+                    ((data['Début appel_time'] >= filters['start_time']) | 
+                     (data['Début appel_time'] <= filters['end_time'])) &
+                    ((data['Fin appel_time'] >= filters['start_time']) | 
+                     (data['Fin appel_time'] <= filters['end_time']))
                 )
             else:
                 # Un appel est dans la plage horaire seulement si :
                 # - son heure de début est dans la plage ET
                 # - son heure de fin est dans la plage
                 time_mask = valid_times & (
-                    (df['Début appel_time'] >= filters['start_time']) & 
-                    (df['Début appel_time'] <= filters['end_time']) &
-                    (df['Fin appel_time'] >= filters['start_time']) & 
-                    (df['Fin appel_time'] <= filters['end_time'])
+                    (data['Début appel_time'] >= filters['start_time']) & 
+                    (data['Début appel_time'] <= filters['end_time']) &
+                    (data['Fin appel_time'] >= filters['start_time']) & 
+                    (data['Fin appel_time'] <= filters['end_time'])
                 )
         
         mask &= time_mask
         
         # Ajout du filtre d'antenne (utiliser la colonne Antenne normalisée)
         if filters['antenne'] != 'Toutes les antennes':
-            mask = mask & (df['Antenne'] == filters['antenne'])
+            mask = mask & (data['Antenne'] == filters['antenne'])
         
-        filtered_df = df[mask].copy()
+        filtered_df = data[mask].copy()
         
         # Supprimer les colonnes temporaires utilisées pour le filtrage
         filtered_df = filtered_df.drop(['Début appel_time', 'Fin appel_time'], axis=1)
         
-        # Affichage des statistiques
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Nombre total d'appels", len(filtered_df))
-        with col2:
-            st.metric("Période", f"{filters['start_date'].strftime('%d/%m/%Y')} - {filters['end_date'].strftime('%d/%m/%Y')}")
-        with col3:
-            st.metric("Plage horaire", f"{filters['start_time'].strftime('%H:%M')} - {filters['end_time'].strftime('%H:%M')}")
+        # Pagination
+        total_items = len(filtered_df)
+        paginated_data = load_data_paginated(filtered_df, st.session_state.calls_page_number, PAGE_SIZE)
         
-        # Affichage des données
-        st.subheader("Liste des appels")
+        # Afficher les données paginées
+        for index, row in paginated_data.iterrows():
+            st.write(f"**Chat {row['id_chat']}**")
+            st.write(f"Date: {row['Crée le']}")
+            st.write(f"Antenne: {row['Antenne']}")
+            st.write(f"Statut: {row['Statut']}")
+            st.write("---")
         
-        st.data_editor(
-            filtered_df,
-            use_container_width=True,
-            column_config={
-                "Crée le": st.column_config.DatetimeColumn("Crée le", format="DD/MM/YYYY HH:mm"),
-                "Antenne": st.column_config.TextColumn("Antenne"),
-                "Numéro": st.column_config.TextColumn("Numéro"),
-                "Statut": st.column_config.TextColumn("Statut"),
-                "Début appel": st.column_config.TextColumn("Heure de début"),
-                "Fin appel": st.column_config.TextColumn("Heure de fin")
-            },
-            column_order=["Crée le", "Antenne", "Numéro", "Statut", "Début appel", "Fin appel"],
-            height=500,
-            num_rows="dynamic",
-            key="calls_table",
-            hide_index=True,
-            disabled=True
-        )
+        # Afficher les contrôles de pagination
+        display_pagination_controls(total_items, PAGE_SIZE, st.session_state.calls_page_number)
 
     if st.sidebar.button("Rafraîchir les données d'appels", key="refresh_calls"):
         if 'calls_data' in st.session_state:
@@ -640,14 +751,15 @@ def display_calls():
         st.rerun()
 
 def display_chats():
-    """Affiche les données des chats avec les filtres."""
-    df = get_ksaar_data()
+    if 'page_number' not in st.session_state:
+        st.session_state.page_number = 0
     
-    if df.empty:
-        st.warning("Aucune donnée de chat n'a pu être récupérée.")
-        return
+    PAGE_SIZE = 50  # Nombre d'éléments par page
     
-    # Récupérer les filtres
+    # Charger les données avec cache
+    data = get_ksaar_data()
+    
+    # Appliquer les filtres
     start_date = datetime.now().date() - timedelta(days=30)
     end_date = datetime.now().date()
     start_time = datetime.strptime('00:00', '%H:%M').time()
@@ -667,17 +779,17 @@ def display_chats():
         end_time = st.time_input('Heure de fin', value=end_time, key="filter_chat_end_time")
     
     with col2:
-        antennes = sorted(df['Antenne'].dropna().unique().tolist())
+        antennes = sorted(data['Antenne'].dropna().unique().tolist())
         selected_antenne = st.multiselect('Antennes', options=['Toutes'] + antennes, default='Toutes', key="filter_antennes")
         
-        benevoles = sorted(df['Volunteer_Location'].dropna().unique().tolist())
+        benevoles = sorted(data['Volunteer_Location'].dropna().unique().tolist())
         selected_benevole = st.multiselect('Bénévoles', options=['Tous'] + benevoles, default='Tous', key="filter_benevoles")
         
         search_text = st.text_input('Rechercher dans les messages', key="filter_search_text")
     
     # Filtrer les messages en fonction du terme de recherche
     if search_text:
-        df = df[df['messages'].str.contains(search_text, case=False, na=False)]
+        data = data[data['messages'].str.contains(search_text, case=False, na=False)]
     
     # Créer un dictionnaire de filtres
     filters = {
@@ -685,13 +797,13 @@ def display_chats():
         'end_date': end_date,
         'start_time': start_time,
         'end_time': end_time,
-        'antenne': 'Toutes les antennes' if 'Toutes' in selected_antenne or not selected_antenne else selected_antenne[0],
-        'benevole': 'Tous les bénévoles' if 'Tous' in selected_benevole or not selected_benevole else selected_benevole[0]
+        'antenne': selected_antenne,
+        'benevole': selected_benevole
     }
     
     # Application des filtres de date
-    mask = (df['Crée le'].dt.date >= filters['start_date']) & \
-           (df['Crée le'].dt.date <= filters['end_date'])
+    mask = (data['Crée le'].dt.date >= filters['start_date']) & \
+           (data['Crée le'].dt.date <= filters['end_date'])
     
     # Convertir les heures en objets time pour la comparaison
     def convert_to_time(dt):
@@ -703,231 +815,94 @@ def display_chats():
             return None
     
     # Créer des colonnes temporaires pour le filtrage des heures
-    df['last_op_msg_time_obj'] = df['last_op_message'].apply(convert_to_time)
-    df['last_user_msg_time_obj'] = df['last_user_message'].apply(convert_to_time)
+    data['time_obj'] = data['Crée le'].apply(convert_to_time)
     
     # Appliquer le filtre d'heure
-    time_mask = pd.Series(True, index=df.index)
-    valid_times = df['last_op_msg_time_obj'].notna() & df['last_user_msg_time_obj'].notna()
+    time_mask = pd.Series(True, index=data.index)
+    valid_times = data['time_obj'].notna()
     
     if valid_times.any():
         # Gérer le cas où l'heure de début est après l'heure de fin (période nocturne)
         if filters['start_time'] > filters['end_time']:
             # La plage horaire s'étend sur deux jours (ex: de 21:00 à 00:00)
             time_mask = valid_times & (
-                (df['last_op_msg_time_obj'] >= filters['start_time']) | 
-                (df['last_op_msg_time_obj'] <= filters['end_time'])
+                (data['time_obj'] >= filters['start_time']) | 
+                (data['time_obj'] <= filters['end_time'])
             )
         else:
             # Plage horaire normale dans la même journée
             time_mask = valid_times & (
-                (df['last_op_msg_time_obj'] >= filters['start_time']) & 
-                (df['last_user_msg_time_obj'] <= filters['end_time'])
+                (data['time_obj'] >= filters['start_time']) & 
+                (data['time_obj'] <= filters['end_time'])
             )
     
     mask &= time_mask
     
-    # Filtrer par antenne et bénévole
-    if filters['antenne'] != 'Toutes les antennes':
-        mask &= (df['Antenne'] == filters['antenne'])
-        
-    if filters['benevole'] != 'Tous les bénévoles':
-        mask &= (df['Volunteer_Location'] == filters['benevole'])
+    # Filtrer par antenne
+    if 'Toutes' not in filters['antenne'] and filters['antenne']:
+        mask &= data['Antenne'].isin(filters['antenne'])
     
-    filtered_df = df[mask].copy()
+    # Filtrer par bénévole
+    if 'Tous' not in filters['benevole'] and filters['benevole']:
+        mask &= data['Volunteer_Location'].isin(filters['benevole'])
+    
+    filtered_df = data[mask].copy()
+    
+    # Supprimer la colonne temporaire
+    filtered_df = filtered_df.drop('time_obj', axis=1)
+    
     filtered_df['select'] = False
     
     # Formatage des heures pour l'affichage (HH:MM)
     filtered_df['last_op_msg_time'] = filtered_df['last_op_message'].dt.strftime('%H:%M')
     filtered_df['last_user_msg_time'] = filtered_df['last_user_message'].dt.strftime('%H:%M')
     
-    # Affichage des statistiques
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Nombre total de chats", len(filtered_df))
-    with col2:
-        st.metric("Période", f"{filters['start_date'].strftime('%d/%m/%Y')} - {filters['end_date'].strftime('%d/%m/%Y')}")
-    with col3:
-        st.metric("Plage horaire", f"{filters['start_time'].strftime('%H:%M')} - {filters['end_time'].strftime('%H:%M')}")
+    # Pagination
+    total_items = len(filtered_df)
+    paginated_data = load_data_paginated(filtered_df, st.session_state.page_number, PAGE_SIZE)
     
-    # Affichage des statistiques par antenne avec bouton pour cacher
-    show_antenne_stats = st.checkbox("Afficher les statistiques par antenne", value=True)
-    if show_antenne_stats:
-        with st.expander("Statistiques par antenne", expanded=True):
-            if 'Antenne' in filtered_df.columns:
-                antenne_counts = filtered_df['Antenne'].value_counts()
-                st.bar_chart(antenne_counts)
+    # Afficher les données paginées
+    for index, row in paginated_data.iterrows():
+        st.write(f"**Chat {row['id_chat']}**")
+        st.write(f"Date: {row['Crée le']}")
+        st.write(f"Antenne: {row['Antenne']}")
+        st.write(f"Statut: {row['Statut']}")
+        st.write("---")
     
-    # Affichage des statistiques par bénévole avec bouton pour cacher
-    show_benevole_stats = st.checkbox("Afficher les statistiques par bénévole", value=True)
-    if show_benevole_stats:
-        with st.expander("Statistiques par bénévole", expanded=True):
-            if 'Volunteer_Location' in filtered_df.columns:
-                benevole_counts = filtered_df['Volunteer_Location'].value_counts()
-                st.bar_chart(benevole_counts)
+    # Afficher les contrôles de pagination
+    display_pagination_controls(total_items, PAGE_SIZE, st.session_state.page_number)
     
-    # Affichage des données
-    st.subheader("Liste des chats")
-    
-    edited_df = st.data_editor(
-        filtered_df,
-        use_container_width=True,
-        column_config={
-            "select": st.column_config.CheckboxColumn("Sélectionner", default=False),
-            "Crée le": st.column_config.DatetimeColumn("Crée le", format="DD/MM/YYYY HH:mm"),
-            "IP": st.column_config.TextColumn("IP"),
-            "last_op_msg_time": st.column_config.TextColumn("Début du chat"),
-            "id_chat": st.column_config.NumberColumn("ID Chat"),
-            "messages": st.column_config.TextColumn("Messages", width="large"),
-            "last_user_msg_time": st.column_config.TextColumn("Fin du chat"),
-            "Antenne": st.column_config.TextColumn("Antenne"),
-            "Volunteer_Location": st.column_config.TextColumn("Bénévole")
-        },
-        column_order=[
-            "select", "Crée le", "IP", "Antenne", "Volunteer_Location", "last_op_msg_time", 
-            "id_chat", "messages", "last_user_msg_time"
-        ],
-        height=500,
-        num_rows="dynamic",
-        key="chat_table",
-        hide_index=True
-    )
-    
-    # Bouton pour générer le rapport uniquement pour les chats sélectionnés
-    if st.button("Générer rapport(s) HTML", key="generate_reports"):
-        selected_chats = edited_df[edited_df["select"]].copy()
-        if not selected_chats.empty:
-            for _, chat_data in selected_chats.iterrows():
-                html_report = generate_chat_report(chat_data)
-                st.download_button(
-                    label=f"Télécharger le rapport pour le chat {chat_data['id_chat']}",
-                    data=html_report,
-                    file_name=f"rapport_chat_{chat_data['id_chat']}.html",
-                    mime="text/html",
-                    key=f"download_{chat_data['id_chat']}"
-                )
-        else:
-            st.warning("Veuillez sélectionner au moins un chat pour générer un rapport.")
-
-    if st.sidebar.button("Rafraîchir les données", key="refresh_data"):
-        if 'chat_data' in st.session_state:
-            del st.session_state['chat_data']
-        st.rerun()
-
-def display_chats_filters(df):
-    """Affiche les filtres pour les chats et retourne les filtres sélectionnés."""
-    st.subheader("Filtres")
-    
+    # Afficher les statistiques
     col1, col2 = st.columns(2)
-    
     with col1:
-        # Utiliser des clés uniques pour chaque élément
-        start_date = st.date_input('Date de début', value=datetime.now().date() - timedelta(days=30), key="filter_start_date")
-        end_date = st.date_input('Date de fin', value=datetime.now().date(), key="filter_end_date")
-        
-        # Modifier cette clé pour la rendre unique
-        start_time = st.time_input('Heure de début', value=datetime.strptime('00:00', '%H:%M').time(), key="filter_chat_start_time")
-        # Modifier cette clé pour la rendre unique
-        end_time = st.time_input('Heure de fin', value=datetime.strptime('23:59', '%H:%M').time(), key="filter_chat_end_time")
-    
+        st.metric("Nombre total de chats filtrés", len(filtered_df))
     with col2:
-        # Assurez-vous que toutes les autres clés sont également uniques
-        antennes = sorted(df['Antenne'].dropna().unique().tolist())
-        selected_antennes = st.multiselect('Antennes', options=['Toutes'] + antennes, default='Toutes', key="filter_antennes")
-        
-        benevoles = sorted(df['Volunteer_Location'].dropna().unique().tolist())
-        selected_benevoles = st.multiselect('Bénévoles', options=['Tous'] + benevoles, default='Tous', key="filter_benevoles")
-        
-        search_text = st.text_input('Rechercher dans les messages', key="filter_search_text")
+        st.metric("Chats potentiellement abusifs", len(identify_potentially_abusive_chats(filtered_df)))
     
-    # Filtrer les messages en fonction du terme de recherche
-    if search_text:
-        df = df[df['messages'].str.contains(search_text, case=False, na=False)]
-    
-    
-    # Application des filtres de date
-    mask = (df['Crée le'].dt.date >= filters['start_date']) & \
-           (df['Crée le'].dt.date <= filters['end_date'])
-    
-    # Convertir les heures en objets time pour la comparaison
-    def convert_to_time(dt):
-        try:
-            if pd.isna(dt):
-                return None
-            return dt.time()
-        except:
-            return None
-    
-    # Créer des colonnes temporaires pour le filtrage des heures
-    df['last_op_msg_time_obj'] = df['last_op_message'].apply(convert_to_time)
-    df['last_user_msg_time_obj'] = df['last_user_message'].apply(convert_to_time)
-    
-    # Appliquer le filtre d'heure
-    time_mask = pd.Series(True, index=df.index)
-    valid_times = df['last_op_msg_time_obj'].notna() & df['last_user_msg_time_obj'].notna()
-    
-    if valid_times.any():
-        # Gérer le cas où l'heure de début est après l'heure de fin (période nocturne)
-        if filters['start_time'] > filters['end_time']:
-            # La plage horaire s'étend sur deux jours (ex: de 21:00 à 00:00)
-            time_mask = valid_times & (
-                (df['last_op_msg_time_obj'] >= filters['start_time']) | 
-                (df['last_op_msg_time_obj'] <= filters['end_time'])
-            )
-        else:
-            # Plage horaire normale dans la même journée
-            time_mask = valid_times & (
-                (df['last_op_msg_time_obj'] >= filters['start_time']) & 
-                (df['last_user_msg_time_obj'] <= filters['end_time'])
-            )
-    
-    mask &= time_mask
-    
-    # Filtrer par antenne et bénévole
-    if filters['antenne'] != 'Toutes les antennes':
-        mask &= (df['Antenne'] == filters['antenne'])
-        
-    if filters['benevole'] != 'Tous les bénévoles':
-        mask &= (df['Volunteer_Location'] == filters['benevole'])
-    
-    filtered_df = df[mask].copy()
-    filtered_df['select'] = False
-    
-    # Formatage des heures pour l'affichage (HH:MM)
-    filtered_df['last_op_msg_time'] = filtered_df['last_op_message'].dt.strftime('%H:%M')
-    filtered_df['last_user_msg_time'] = filtered_df['last_user_message'].dt.strftime('%H:%M')
-    
-    # Affichage des statistiques
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Nombre total de chats", len(filtered_df))
-    with col2:
-        st.metric("Période", f"{filters['start_date'].strftime('%d/%m/%Y')} - {filters['end_date'].strftime('%d/%m/%Y')}")
-    with col3:
-        st.metric("Plage horaire", f"{filters['start_time'].strftime('%H:%M')} - {filters['end_time'].strftime('%H:%M')}")
-    
-    # Affichage des statistiques par antenne avec bouton pour cacher
-    show_antenne_stats = st.checkbox("Afficher les statistiques par antenne", value=True)
-    if show_antenne_stats:
-        with st.expander("Statistiques par antenne", expanded=True):
-            if 'Antenne' in filtered_df.columns:
+    # Afficher des statistiques par antenne et bénévole
+    if len(filtered_df) > 0:
+        with st.expander("Statistiques par antenne et bénévole", expanded=False):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Répartition par antenne")
                 antenne_counts = filtered_df['Antenne'].value_counts()
                 st.bar_chart(antenne_counts)
-    
-    # Affichage des statistiques par bénévole avec bouton pour cacher
-    show_benevole_stats = st.checkbox("Afficher les statistiques par bénévole", value=True)
-    if show_benevole_stats:
-        with st.expander("Statistiques par bénévole", expanded=True):
-            if 'Volunteer_Location' in filtered_df.columns:
+            
+            with col2:
+                st.subheader("Répartition par bénévole")
                 benevole_counts = filtered_df['Volunteer_Location'].value_counts()
                 st.bar_chart(benevole_counts)
     
-    # Affichage des données
-    st.subheader("Liste des chats")
+    # Afficher la liste des chats potentiellement abusifs
+    st.subheader("Liste des chats potentiellement abusifs")
     
+    # Ajouter une colonne de sélection
+    filtered_df['select'] = False
+    
+    # Afficher le tableau avec les colonnes disponibles
     edited_df = st.data_editor(
         filtered_df,
-        use_container_width=True,
         column_config={
             "select": st.column_config.CheckboxColumn("Sélectionner", default=False),
             "Crée le": st.column_config.DatetimeColumn("Crée le", format="DD/MM/YYYY HH:mm"),
@@ -949,26 +924,234 @@ def display_chats_filters(df):
         hide_index=True
     )
     
-    # Bouton pour générer le rapport uniquement pour les chats sélectionnés
-    if st.button("Générer rapport(s) HTML", key="generate_reports"):
+    # Bouton pour analyser en détail les chats sélectionnés
+    if st.button("Analyser en détail les chats sélectionnés", key="analyze_selected"):
         selected_chats = edited_df[edited_df["select"]].copy()
-        if not selected_chats.empty:
-            for _, chat_data in selected_chats.iterrows():
-                html_report = generate_chat_report(chat_data)
-                st.download_button(
-                    label=f"Télécharger le rapport pour le chat {chat_data['id_chat']}",
-                    data=html_report,
-                    file_name=f"rapport_chat_{chat_data['id_chat']}.html",
-                    mime="text/html",
-                    key=f"download_{chat_data['id_chat']}"
-                )
+        
+        if selected_chats.empty:
+            st.warning("Veuillez sélectionner au moins un chat pour l'analyse détaillée.")
         else:
-            st.warning("Veuillez sélectionner au moins un chat pour générer un rapport.")
-
-    if st.sidebar.button("Rafraîchir les données", key="refresh_data"):
-        if 'chat_data' in st.session_state:
-            del st.session_state['chat_data']
-        st.rerun()
+            st.subheader("Analyse détaillée des chats sélectionnés")
+            
+            with st.spinner("Analyse détaillée en cours..."):
+                # Analyser chaque chat sélectionné
+                detailed_results = []
+                
+                for _, chat in selected_chats.iterrows():
+                    chat_id = chat.get('id_chat')
+                    # Récupérer les données complètes du chat depuis le DataFrame original
+                    original_chat_data = data[data['id_chat'] == chat_id]
+                    
+                    if original_chat_data.empty:
+                        st.error(f"Impossible de trouver les données complètes pour le chat {chat_id}")
+                        continue
+                    
+                    # Utiliser les données complètes du chat
+                    messages = original_chat_data.iloc[0].get('messages', '')
+                    
+                    # Utiliser la fonction d'analyse contextuelle améliorée
+                    try:
+                        risk_score, risk_factors, problematic_phrases, operator_harassment, manipulation_patterns, topic_changes = analyze_chat_content(messages)
+                    except Exception as e:
+                        st.error(f"Erreur lors de l'analyse du chat {chat_id}: {str(e)}")
+                        continue
+                    
+                    # Convertir le dictionnaire de phrases problématiques en texte formaté
+                    phrases_text = ""
+                    for category, phrases in problematic_phrases.items():
+                        if phrases:
+                            phrases_text += f"**{category}**:\n"
+                            for phrase in phrases[:3]:  # Limiter à 3 phrases par catégorie
+                                phrases_text += f"- {phrase}\n"
+                            phrases_text += "\n"
+                    
+                    # Convertir les patterns de manipulation en texte formaté
+                    manipulation_text = ""
+                    if manipulation_patterns:
+                        for pattern in manipulation_patterns:
+                            manipulation_text += f"**{pattern['type']}**: {pattern['description']}\n"
+                            manipulation_text += f"Occurrences: {pattern['occurrences']}\n"
+                            if 'examples' in pattern and pattern['examples']:
+                                manipulation_text += "Exemples:\n"
+                                for example in pattern['examples'][:2]:  # Limiter à 2 exemples
+                                    if isinstance(example, dict) and 'message' in example:
+                                        manipulation_text += f"- {example['message']}\n"
+                                    else:
+                                        manipulation_text += f"- {str(example)}\n"
+                            manipulation_text += "\n"
+                    
+                    result_dict = {
+                        'id_chat': chat_id,
+                        'Crée le': original_chat_data.iloc[0].get('Crée le'),
+                        'Antenne': original_chat_data.iloc[0].get('Antenne'),
+                        'Volunteer_Location': original_chat_data.iloc[0].get('Volunteer_Location'),
+                        'Score de risque': risk_score,
+                        'Niveau de risque': get_abuse_risk_level(risk_score),
+                        'Facteurs de risque': ', '.join(risk_factors),
+                        'Phrases problématiques': phrases_text,
+                        'Harcèlement opérateur': "Oui" if operator_harassment else "Non",
+                        'Analyse contextuelle': manipulation_text,
+                        'Schémas de manipulation': len(manipulation_patterns) if manipulation_patterns else 0,
+                        'Changements de sujet': len(topic_changes) if topic_changes else 0,
+                        'messages': messages  # Contenu complet du chat
+                    }
+                    
+                    detailed_results.append(result_dict)
+                
+                # Créer le DataFrame des résultats détaillés
+                detailed_df = pd.DataFrame(detailed_results)
+                
+                if not detailed_df.empty:
+                    # Trier par score de risque
+                    detailed_df = detailed_df.sort_values(by='Score de risque', ascending=False)
+                    
+                    # Afficher les résultats détaillés
+                    st.dataframe(
+                        detailed_df,
+                        column_config={
+                            "id_chat": st.column_config.NumberColumn("ID Chat"),
+                            "Crée le": st.column_config.DatetimeColumn("Date", format="DD/MM/YYYY HH:mm"),
+                            "Antenne": st.column_config.TextColumn("Antenne"),
+                            "Volunteer_Location": st.column_config.TextColumn("Bénévole"),
+                            "Score de risque": st.column_config.ProgressColumn(
+                                "Score de risque",
+                                format="%d",
+                                min_value=0,
+                                max_value=100,
+                            ),
+                            "Niveau de risque": st.column_config.TextColumn("Niveau de risque"),
+                            "Facteurs de risque": st.column_config.TextColumn("Facteurs de risque"),
+                            "Phrases problématiques": st.column_config.TextColumn("Phrases problématiques", width="large"),
+                            "Harcèlement opérateur": st.column_config.TextColumn("Harcèlement opérateur"),
+                            "Analyse contextuelle": st.column_config.TextColumn("Analyse contextuelle", width="large"),
+                            "Schémas de manipulation": st.column_config.NumberColumn("Schémas de manipulation"),
+                            "Changements de sujet": st.column_config.NumberColumn("Changements de sujet"),
+                            "messages": st.column_config.TextColumn("Aperçu du message", width="medium")
+                        },
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # Permettre de voir les détails d'un chat analysé
+                    if not detailed_df.empty:
+                        selected_chat_id = st.selectbox(
+                            "Sélectionner un chat pour voir les détails complets",
+                            detailed_df['id_chat'].tolist(),
+                            key="selected_detailed_chat"
+                        )
+                        
+                        if selected_chat_id:
+                            selected_chat = detailed_df[detailed_df['id_chat'] == selected_chat_id].iloc[0]
+                            
+                            with st.expander(f"Détails complets du chat {selected_chat_id}", expanded=True):
+                                # Afficher les informations du chat
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.write(f"**Date:** {selected_chat['Crée le'].strftime('%d/%m/%Y %H:%M')}")
+                                with col2:
+                                    st.write(f"**Antenne:** {selected_chat['Antenne']}")
+                                with col3:
+                                    st.write(f"**Bénévole:** {selected_chat['Volunteer_Location']}")
+                                
+                                st.write(f"**Score de risque:** {selected_chat['Score de risque']} ({selected_chat['Niveau de risque']})")
+                                st.write(f"**Facteurs de risque:** {selected_chat['Facteurs de risque']}")
+                                st.write(f"**Harcèlement envers l'opérateur:** {selected_chat['Harcèlement opérateur']}")
+                                
+                                # Afficher les phrases problématiques
+                                if selected_chat['Phrases problématiques']:
+                                    st.subheader("Phrases problématiques détectées")
+                                    st.markdown(selected_chat['Phrases problématiques'])
+                                
+                                # Afficher l'analyse contextuelle
+                                if selected_chat['Analyse contextuelle']:
+                                    st.subheader("Analyse contextuelle")
+                                    st.markdown(selected_chat['Analyse contextuelle'])
+                                
+                                # Afficher le contenu complet du chat
+                                st.subheader("Contenu complet du chat")
+                                
+                                # Afficher le contenu du chat dans un format plus lisible
+                                chat_content = selected_chat['messages']
+                                st.text_area("Messages", value=chat_content, height=400)
+                                
+                                # Bouton pour générer un rapport
+                                if st.button("Générer un rapport pour ce chat", key=f"generate_report_{selected_chat_id}"):
+                                    chat_data = data[data['id_chat'] == selected_chat_id].iloc[0]
+                                    
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        html_report = generate_chat_report(chat_data)
+                                        st.download_button(
+                                            label=f"Télécharger en HTML",
+                                            data=html_report,
+                                            file_name=f"rapport_chat_abusif_{selected_chat_id}.html",
+                                            mime="text/html",
+                                            key=f"download_html_{selected_chat_id}"
+                                        )
+                                    
+                                    with col2:
+                                        txt_report = generate_chat_report_txt(chat_data)
+                                        st.download_button(
+                                            label=f"Télécharger en TXT",
+                                            data=txt_report,
+                                            file_name=f"rapport_chat_abusif_{selected_chat_id}.txt",
+                                            mime="text/plain",
+                                            key=f"download_txt_{selected_chat_id}"
+                                        )
+                                    
+                                    with col3:
+                                        csv_report = generate_chat_report_csv(chat_data)
+                                        st.download_button(
+                                            label=f"Télécharger en CSV",
+                                            data=csv_report,
+                                            file_name=f"rapport_chat_abusif_{selected_chat_id}.csv",
+                                            mime="text/csv",
+                                            key=f"download_csv_{selected_chat_id}"
+                                        )
+                else:
+                    st.warning("Aucun résultat d'analyse détaillée n'a été généré.")
+    
+    # Bouton pour générer des rapports pour les chats sélectionnés
+    if st.button("Générer des rapports pour les chats sélectionnés", key="generate_reports_selected"):
+        selected_chats = edited_df[edited_df["select"]].copy()
+    
+        if selected_chats.empty:
+            st.warning("Veuillez sélectionner au moins un chat pour générer des rapports.")
+        else:
+            for i, chat in selected_chats.iterrows():
+                chat_id = chat['id_chat']
+                chat_data = data[data['id_chat'] == chat_id].iloc[0]
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    html_report = generate_chat_report(chat_data)
+                    st.download_button(
+                        label=f"HTML - Chat {chat_id}",
+                        data=html_report,
+                        file_name=f"rapport_chat_{chat_id}.html",
+                        mime="text/html",
+                        key=f"download_html_{chat_id}_{i}"
+                    )
+                
+                with col2:
+                    txt_report = generate_chat_report_txt(chat_data)
+                    st.download_button(
+                        label=f"TXT - Chat {chat_id}",
+                        data=txt_report,
+                        file_name=f"rapport_chat_{chat_id}.txt",
+                        mime="text/plain",
+                        key=f"download_txt_{chat_id}_{i}"
+                    )
+                
+                with col3:
+                    csv_report = generate_chat_report_csv(chat_data)
+                    st.download_button(
+                        label=f"CSV - Chat {chat_id}",
+                        data=csv_report,
+                        file_name=f"rapport_chat_{chat_id}.csv",
+                        mime="text/csv",
+                        key=f"download_csv_{chat_id}_{i}"
+                    )
 
 def extract_user_messages(messages):
     """Extrait les messages de l'utilisateur à partir du texte complet de la conversation."""
@@ -1250,6 +1433,12 @@ def analyze_chat_content(messages):
     # Extraire les messages de l'utilisateur et de l'opérateur
     user_messages = extract_user_messages(messages)
     operator_messages = extract_operator_messages(messages)
+    
+    # Analyse du sentiment et résumé
+    sentiment = analyze_sentiment(" ".join(user_messages)) if user_messages else "Neutre"
+    summary = generate_simple_summary(messages)
+    emotions = [analyze_sentiment(msg) for msg in user_messages] if user_messages else []
+    emotion_counts = Counter(emotions)
     
     if not user_messages:
         return 0, [], {}, False, [], []
@@ -1541,10 +1730,16 @@ def analyze_chats():
             else:
                 result_dict['Changements de sujet'] = 0
             
-            results.append(result_dict)
+            
+            result_dict["Sentiment global"] = sentiment
+            result_dict["Résumé"] = summary
+            result_dict["Répartition émotions"] = dict(emotion_counts)
+    results.append(result_dict)
     
     # Créer le DataFrame et trier par score de risque
     results_df = pd.DataFrame(results)
+    if not results_df.empty:
+        results_df = cluster_chats(results_df)
     if not results_df.empty:
         results_df = results_df.sort_values(by='Score de risque', ascending=False)
     
@@ -1576,7 +1771,7 @@ def identify_potentially_abusive_chats(df):
         
         
         # Harcèlement et menaces
-        "connard", "salope", "pute", "enculé", "encule", "pd", "tapette", "nègre", 
+        "connard", "salope", "pute", "enculé", "encule", "pd", "tapette", "nègre", "bite" , "bit"
         "negre", "bougnoule", "suicide", "tuer", "mourir", "crever", "adresse",
         "menace", "frapper", "battre", "harcèle", "harcele", "stalker", "connard", "connasse", "conasse", "con", "sale con", "salope", "salopes",
         "pute", "putain", "putes", "enculé", "encule", "enculer", "ntm", "nique ta mère",
@@ -1990,35 +2185,82 @@ def display_abuse_analysis():
                                 # Bouton pour générer un rapport
                                 if st.button("Générer un rapport pour ce chat", key=f"generate_report_{selected_chat_id}"):
                                     chat_data = df[df['id_chat'] == selected_chat_id].iloc[0]
-                                    html_report = generate_chat_report(chat_data)
-                                    st.download_button(
-                                        label=f"Télécharger le rapport pour le chat {selected_chat_id}",
-                                        data=html_report,
-                                        file_name=f"rapport_chat_abusif_{selected_chat_id}.html",
-                                        mime="text/html",
-                                        key=f"download_report_{selected_chat_id}"
-                                    )
+                                    
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        html_report = generate_chat_report(chat_data)
+                                        st.download_button(
+                                            label=f"Télécharger en HTML",
+                                            data=html_report,
+                                            file_name=f"rapport_chat_abusif_{selected_chat_id}.html",
+                                            mime="text/html",
+                                            key=f"download_html_{selected_chat_id}"
+                                        )
+                                    
+                                    with col2:
+                                        txt_report = generate_chat_report_txt(chat_data)
+                                        st.download_button(
+                                            label=f"Télécharger en TXT",
+                                            data=txt_report,
+                                            file_name=f"rapport_chat_abusif_{selected_chat_id}.txt",
+                                            mime="text/plain",
+                                            key=f"download_txt_{selected_chat_id}"
+                                        )
+                                    
+                                    with col3:
+                                        csv_report = generate_chat_report_csv(chat_data)
+                                        st.download_button(
+                                            label=f"Télécharger en CSV",
+                                            data=csv_report,
+                                            file_name=f"rapport_chat_abusif_{selected_chat_id}.csv",
+                                            mime="text/csv",
+                                            key=f"download_csv_{selected_chat_id}"
+                                        )
                 else:
                     st.warning("Aucun résultat d'analyse détaillée n'a été généré.")
     
     # Bouton pour générer des rapports pour les chats sélectionnés
     if st.button("Générer des rapports pour les chats sélectionnés", key="generate_reports_selected"):
         selected_chats = edited_df[edited_df["select"]].copy()
-        
+    
         if selected_chats.empty:
             st.warning("Veuillez sélectionner au moins un chat pour générer des rapports.")
         else:
-            for _, chat in selected_chats.iterrows():
+            for i, chat in selected_chats.iterrows():
                 chat_id = chat['id_chat']
                 chat_data = df[df['id_chat'] == chat_id].iloc[0]
-                html_report = generate_chat_report(chat_data)
-                st.download_button(
-                    label=f"Télécharger le rapport pour le chat {chat_id}",
-                    data=html_report,
-                    file_name=f"rapport_chat_{chat_id}.html",
-                    mime="text/html",
-                    key=f"download_{chat_id}"
-                )
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    html_report = generate_chat_report(chat_data)
+                    st.download_button(
+                        label=f"HTML - Chat {chat_id}",
+                        data=html_report,
+                        file_name=f"rapport_chat_{chat_id}.html",
+                        mime="text/html",
+                        key=f"download_html_{chat_id}_{i}"
+                    )
+                
+                with col2:
+                    txt_report = generate_chat_report_txt(chat_data)
+                    st.download_button(
+                        label=f"TXT - Chat {chat_id}",
+                        data=txt_report,
+                        file_name=f"rapport_chat_{chat_id}.txt",
+                        mime="text/plain",
+                        key=f"download_txt_{chat_id}_{i}"
+                    )
+                
+                with col3:
+                    csv_report = generate_chat_report_csv(chat_data)
+                    st.download_button(
+                        label=f"CSV - Chat {chat_id}",
+                        data=csv_report,
+                        file_name=f"rapport_chat_{chat_id}.csv",
+                        mime="text/csv",
+                        key=f"download_csv_{chat_id}_{i}"
+                    )
+
 def main():
     st.set_page_config(**ksaar_config['app_config'])
     
