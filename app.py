@@ -1,13 +1,12 @@
 import streamlit as st
 
-# Au lieu d'importer depuis config.py
 try:
     credentials = st.secrets["credentials"]
     ksaar_config = st.secrets["ksaar_config"]
     # Configuration de la page doit être la première commande Streamlit
     st.set_page_config(**ksaar_config.get('app_config', {
         'page_title': "Dashboard GASAS",
-        'page_icon': "🎯",
+        'page_icon': "📊",
         'layout': "wide",
         'initial_sidebar_state': "expanded"
     }))
@@ -15,10 +14,19 @@ except Exception as e:
     # Configuration par défaut si les secrets ne sont pas disponibles
     st.set_page_config(
         page_title="Dashboard GASAS",
-        page_icon="🎯",
+        page_icon="📊",
         layout="wide",
         initial_sidebar_state="expanded"
     )
+    # Définir des valeurs par défaut vides pour éviter les erreurs
+    credentials = {}
+    ksaar_config = {
+        'api_base_url': '',
+        'api_key_name': '',
+        'api_key_password': ''
+    }
+    st.error(f"⚠️ Erreur de configuration des secrets: {str(e)}")
+    st.info("Veuillez configurer les secrets dans les paramètres de l'application Streamlit Cloud.")
 
 import pandas as pd
 import requests
