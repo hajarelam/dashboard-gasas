@@ -1,7 +1,7 @@
 import streamlit as st
 
 # ─────────────────────────────────────────────
-# Page config (doit être la 1ère commande Streamlit)
+# Page config (1ère commande Streamlit)
 # ─────────────────────────────────────────────
 CONFIG_LOADED = False
 CONFIG_ERROR = None
@@ -37,17 +37,13 @@ import pandas as pd
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import re
-import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import sys
-# nltk rendu optionnel (non utilisé ici)
-# from textblob import TextBlob  # import conservé si tu veux la polarité simple
 
 # ─────────────────────────────────────────────
-# Utils réseau : session avec retry/timeout
+# Réseau : session avec retry/timeout
 # ─────────────────────────────────────────────
 def make_session():
     s = requests.Session()
@@ -61,7 +57,7 @@ def make_session():
     return s
 
 # ─────────────────────────────────────────────
-# Regex abus : compilée une seule fois
+# Regex abus (compilée 1 fois)
 # ─────────────────────────────────────────────
 @st.cache_resource
 def compile_abuse_patterns():
@@ -89,11 +85,11 @@ def load_data_paginated(data: pd.DataFrame, page_number: int, page_size: int) ->
     if data is None or data.empty:
         return pd.DataFrame()
     start_idx = page_number * page_size
-    end_idx = start_idx + page_size
+    end_idx = min(start_idx + page_size, len(data))
     if start_idx >= len(data):
         start_idx = 0
+        end_idx = min(page_size, len(data))
         st.session_state.page_number = 0
-    end_idx = min(end_idx, len(data))
     return data.iloc[start_idx:end_idx].copy()
 
 def display_pagination_controls(total_items, page_size, current_page, key_prefix=""):
@@ -218,15 +214,12 @@ def get_antenne_from_dst(dst):
     return None
 
 # ─────────────────────────────────────────────
-# API Ksaar : chargement incrémental + cache
+# API Ksaar – Chats (incrémental et “mois en cours”)
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=7200)  # 2h
+@st.cache_data(ttl=7200)
 def get_ksaar_data(max_pages: int = 3, force_refresh: bool = False):
-    """
-    Charge les chats depuis Ksaar, rapidement (max_pages) puis incrémental si besoin.
-    """
+    """Chargement incrémental rapide (max_pages, tri desc)."""
     try:
-        # cache court-circuit si présent en session et récent (≤5 min)
         cache_valid = ('chat_data' in st.session_state and
                        'last_update_chat' in st.session_state and
                        (datetime.now() - st.session_state['last_update_chat']).total_seconds() <= 300 and
@@ -239,18 +232,16 @@ def get_ksaar_data(max_pages: int = 3, force_refresh: bool = False):
         auth = (ksaar_config['api_key_name'], ksaar_config['api_key_password'])
         session = make_session()
 
-        all_records = []
-        current_page = 1
+        all_records, current_page = [], 1
         last_page = None
 
-        with st.spinner(f'Chargement des données (jusqu’à {max_pages} pages)...'):
+        with st.spinner(f'Chargement des données (jusqu’à {max_pages} pages)…'):
             while True:
                 params = {"page": current_page, "limit": 100, "sort": "-createdAt"}
                 r = session.get(url, params=params, auth=auth, timeout=20)
                 if r.status_code != 200:
                     st.error(f"Erreur API Ksaar: {r.status_code}")
                     break
-
                 data = r.json()
                 records = data.get('results', [])
                 last_page = data.get('lastPage', current_page)
@@ -277,7 +268,6 @@ def get_ksaar_data(max_pages: int = 3, force_refresh: bool = False):
                     dept = record_data['Département Origine 2']
                     raw_ant = extract_antenne(msg, dept)
                     record_data['Antenne'] = get_normalized_antenne(raw_ant)
-
                     all_records.append(record_data)
 
                 if current_page >= last_page or current_page >= max_pages:
@@ -303,6 +293,108 @@ def get_ksaar_data(max_pages: int = 3, force_refresh: bool = False):
         return pd.DataFrame()
 
 @st.cache_data(ttl=7200)
+def get_ksaar_data_month(year: int, month: int):
+    """
+    Charge toutes les données du MOIS (UTC) demandé.
+    S’arrête dès que la dernière ligne de la page est < 1er jour du mois.
+    """
+    try:
+        first_day = datetime(year, month, 1)
+        if month == 12:
+            next_month = datetime(year + 1, 1, 1)
+        else:
+            next_month = datetime(year, month + 1, 1)
+
+        workflow_id = "1500d159-5185-4487-be1f-fa18c6c85ec5"
+        url = f"{ksaar_config['api_base_url']}/v1/workflows/{workflow_id}/records"
+        auth = (ksaar_config['api_key_name'], ksaar_config['api_key_password'])
+        session = make_session()
+
+        all_records = []
+        current_page = 1
+
+        with st.spinner(f'Chargement des chats du {first_day.strftime("%m/%Y")}…'):
+            while True:
+                params = {"page": current_page, "limit": 100, "sort": "-createdAt"}
+                r = session.get(url, params=params, auth=auth, timeout=20)
+                if r.status_code != 200:
+                    st.error(f"Erreur API Ksaar: {r.status_code}")
+                    break
+                data = r.json()
+                records = data.get('results', [])
+                if not records:
+                    break
+
+                # Conversion rapide pour check bornes de page
+                created_list = []
+                for rec in records:
+                    c = rec.get('createdAt')
+                    try:
+                        created_list.append(pd.to_datetime(c, errors='coerce'))
+                    except Exception:
+                        created_list.append(pd.NaT)
+
+                # Si toute la page est < first_day → break
+                if pd.notnull(pd.Series(created_list)).any():
+                    newest = pd.Series(created_list).max()
+                    oldest = pd.Series(created_list).min()
+                    if pd.notnull(oldest) and oldest < first_day and pd.notnull(newest) and newest < first_day:
+                        break
+
+                # Sinon, prendre seulement ceux dans [first_day, next_month)
+                for rec, c in zip(records, created_list):
+                    if pd.isna(c):
+                        continue
+                    if (c >= first_day) and (c < next_month):
+                        record_data = {
+                            'Crée le': rec.get('createdAt'),
+                            'Modifié le': rec.get('updatedAt'),
+                            'IP': rec.get('IP 2', ''),
+                            'pnd_time': rec.get('Date complète début 2'),
+                            'id_chat': rec.get('Chat ID 2'),
+                            'messages': rec.get('Conversation complète 2', ''),
+                            'last_user_message': rec.get('Date complète fin 2'),
+                            'last_op_message': rec.get('Date complète début 2'),
+                            'Message système 1': rec.get('Message système 1', ''),
+                            'Département Origine 2': rec.get('Département Origine 2', '')
+                        }
+                        operator_id = rec.get('Opérateur ID (API) 1')
+                        op_name = get_operator_name(operator_id)
+                        record_data['Operateur_Name'] = op_name
+                        record_data['Volunteer_Location'] = get_volunteer_location(op_name)
+                        raw_ant = extract_antenne(record_data['Message système 1'], record_data['Département Origine 2'])
+                        record_data['Antenne'] = get_normalized_antenne(raw_ant)
+                        all_records.append(record_data)
+
+                # Si newest < first_day → on peut arrêter
+                if pd.notnull(pd.Series(created_list)).any():
+                    newest = pd.Series(created_list).max()
+                    if pd.notnull(newest) and newest < first_day:
+                        break
+
+                # Continuer sinon
+                last_page = data.get('lastPage', current_page)
+                if current_page >= last_page:
+                    break
+                current_page += 1
+
+        if not all_records:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(all_records)
+        for col in ['Crée le', 'Modifié le', 'pnd_time', 'last_user_message', 'last_op_message']:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors='coerce')
+        return df
+
+    except Exception as e:
+        st.error(f"Erreur Ksaar (mois): {str(e)}")
+        return pd.DataFrame()
+
+# ─────────────────────────────────────────────
+# API Ksaar – Appels
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=7200)
 def get_calls_data(force_refresh: bool = False):
     try:
         if 'calls_data' in st.session_state and not force_refresh:
@@ -313,9 +405,7 @@ def get_calls_data(force_refresh: bool = False):
         auth = (ksaar_config['api_key_name'], ksaar_config['api_key_password'])
         session = make_session()
 
-        all_records = []
-        current_page = 1
-
+        all_records, current_page = [], 1
         while True:
             params = {"page": current_page, "limit": 200, "sort": "-createdAt"}
             r = session.get(url, params=params, auth=auth, timeout=20)
@@ -341,7 +431,7 @@ def get_calls_data(force_refresh: bool = False):
                 dst = rec.get('dst', '')
                 record_data = {
                     'Crée le': rec.get('createdAt'),
-                    'Antenne': None,  # remplie plus bas
+                    'Antenne': get_antenne_from_dst(dst) or "Inconnue",
                     'Numéro': rec.get('from_number', ''),
                     'Statut': rec.get('disposition', ''),
                     'Code_de_cloture': rec.get('Code_de_cloture', ''),
@@ -349,8 +439,6 @@ def get_calls_data(force_refresh: bool = False):
                     'Fin appel': extract_time(rec.get('end')),
                     'dst': dst
                 }
-                ant = get_antenne_from_dst(dst)
-                record_data['Antenne'] = ant if ant else "Inconnue"
                 all_records.append(record_data)
 
             if current_page >= data.get('lastPage', 1):
@@ -368,7 +456,7 @@ def get_calls_data(force_refresh: bool = False):
         return df
 
     except Exception as e:
-        st.error(f"Erreur Ksaar (appels): {str(e)}")
+        st.error(f"Erreur Ksaar (appels): {e}")
         return pd.DataFrame()
 
 # ─────────────────────────────────────────────
@@ -377,13 +465,11 @@ def get_calls_data(force_refresh: bool = False):
 def check_password():
     if st.session_state.get('authenticated') is True:
         return True
-
     st.title("Login")
     with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Login")
-
+        username = st.text_input("Username", key="auth_username")
+        password = st.text_input("Password", type="password", key="auth_password")
+        submit = st.form_submit_button("Login", use_container_width=True)
         if submit:
             if username in credentials and password == credentials[username]:
                 st.session_state['authenticated'] = True
@@ -394,7 +480,7 @@ def check_password():
     return False
 
 # ─────────────────────────────────────────────
-# Fonctions analyse/exports (dates robustes)
+# Analyse / exports
 # ─────────────────────────────────────────────
 def identify_potentially_abusive_chats(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -459,28 +545,26 @@ def get_abuse_risk_level(score):
             "Très faible")
 
 def generate_chat_report(chat_data: dict) -> str:
-    date_val = chat_data.get('Crée le')
-    date_txt = date_val.strftime('%d/%m/%Y %H:%M') if pd.notnull(date_val) else 'N/A'
-    ip_txt = chat_data.get('IP', 'N/A')
-    pnd = chat_data.get('pnd_time')
-    pnd_txt = pnd.strftime('%d/%m/%Y %H:%M') if pd.notnull(pnd) else 'N/A'
-    lum = chat_data.get('last_user_message')
-    lum_txt = lum.strftime('%d/%m/%Y %H:%M') if pd.notnull(lum) else 'N/A'
-    lom = chat_data.get('last_op_message')
-    lom_txt = lom.strftime('%d/%m/%Y %H:%M') if pd.notnull(lom) else 'N/A'
-    antenne = chat_data.get('Antenne', 'Inconnue')
-    volunteer_location = chat_data.get('Volunteer_Location', 'Inconnu')
+    def dtpretty(v):
+        return v.strftime('%d/%m/%Y %H:%M') if pd.notnull(v) else 'N/A'
+    date_txt = dtpretty(chat_data.get('Crée le'))
+    pnd_txt  = dtpretty(chat_data.get('pnd_time'))
+    lum_txt  = dtpretty(chat_data.get('last_user_message'))
+    lom_txt  = dtpretty(chat_data.get('last_op_message'))
+    ip_txt   = chat_data.get('IP', 'N/A')
+    antenne  = chat_data.get('Antenne', 'Inconnue')
+    vol_loc  = chat_data.get('Volunteer_Location', 'Inconnu')
     messages = chat_data.get('messages', '')
 
     return f"""
 <html>
 <head>
-    <style>
-        body {{ font-family: Arial, sans-serif; margin: 40px; }}
-        .header {{ background-color: #f8f9fa; padding: 20px; border-radius: 5px; }}
-        .chat-info {{ margin: 20px 0; }}
-        .messages {{ white-space: pre-wrap; background-color: white; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }}
-    </style>
+<style>
+body {{ font-family: Arial, sans-serif; margin: 40px; }}
+.header {{ background-color: #f8f9fa; padding: 20px; border-radius: 5px; }}
+.chat-info {{ margin: 20px 0; }}
+.messages {{ white-space: pre-wrap; background-color: white; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }}
+</style>
 </head>
 <body>
     <div class="header">
@@ -489,7 +573,7 @@ def generate_chat_report(chat_data: dict) -> str:
         <p><strong>IP:</strong> {ip_txt}</p>
         <p><strong>Date:</strong> {date_txt}</p>
         <p><strong>Antenne:</strong> {antenne}</p>
-        <p><strong>Bénévole:</strong> {volunteer_location}</p>
+        <p><strong>Bénévole:</strong> {vol_loc}</p>
     </div>
     <div class="chat-info">
         <p><strong>Temps d'attente:</strong> {pnd_txt}</p>
@@ -505,17 +589,15 @@ def generate_chat_report(chat_data: dict) -> str:
 """
 
 def generate_chat_report_txt(chat_data: dict) -> str:
-    date_val = chat_data.get('Crée le')
-    date_txt = date_val.strftime('%d/%m/%Y %H:%M') if pd.notnull(date_val) else 'N/A'
-    ip_txt = chat_data.get('IP', 'N/A')
-    pnd = chat_data.get('pnd_time')
-    pnd_txt = pnd.strftime('%d/%m/%Y %H:%M') if pd.notnull(pnd) else 'N/A'
-    lum = chat_data.get('last_user_message')
-    lum_txt = lum.strftime('%d/%m/%Y %H:%M') if pd.notnull(lum) else 'N/A'
-    lom = chat_data.get('last_op_message')
-    lom_txt = lom.strftime('%d/%m/%Y %H:%M') if pd.notnull(lom) else 'N/A'
-    antenne = chat_data.get('Antenne', 'Inconnue')
-    volunteer_location = chat_data.get('Volunteer_Location', 'Inconnu')
+    def dtpretty(v):
+        return v.strftime('%d/%m/%Y %H:%M') if pd.notnull(v) else 'N/A'
+    date_txt = dtpretty(chat_data.get('Crée le'))
+    pnd_txt  = dtpretty(chat_data.get('pnd_time'))
+    lum_txt  = dtpretty(chat_data.get('last_user_message'))
+    lom_txt  = dtpretty(chat_data.get('last_op_message'))
+    ip_txt   = chat_data.get('IP', 'N/A')
+    antenne  = chat_data.get('Antenne', 'Inconnue')
+    vol_loc  = chat_data.get('Volunteer_Location', 'Inconnu')
     messages = chat_data.get('messages', '')
 
     return f"""RAPPORT DE CHAT NIGHTLINE
@@ -525,7 +607,7 @@ ID Chat: {chat_data.get('id_chat','N/A')}
 IP: {ip_txt}
 Date: {date_txt}
 Antenne: {antenne}
-Bénévole: {volunteer_location}
+Bénévole: {vol_loc}
 
 INFORMATIONS SUPPLÉMENTAIRES
 ===========================
@@ -542,31 +624,20 @@ def generate_chat_report_csv(chat_data: dict) -> str:
     import io, csv
     out = io.StringIO()
     w = csv.writer(out)
-    date_val = chat_data.get('Crée le')
-    date_txt = date_val.strftime('%d/%m/%Y %H:%M') if pd.notnull(date_val) else 'N/A'
-    ip_txt = chat_data.get('IP', 'N/A')
-    pnd = chat_data.get('pnd_time')
-    pnd_txt = pnd.strftime('%d/%m/%Y %H:%M') if pd.notnull(pnd) else 'N/A'
-    lum = chat_data.get('last_user_message')
-    lum_txt = lum.strftime('%d/%m/%Y %H:%M') if pd.notnull(lum) else 'N/A'
-    lom = chat_data.get('last_op_message')
-    lom_txt = lom.strftime('%d/%m/%Y %H:%M') if pd.notnull(lom) else 'N/A'
-    antenne = chat_data.get('Antenne', 'Inconnue')
-    volunteer_location = chat_data.get('Volunteer_Location', 'Inconnu')
-    messages = str(chat_data.get('messages','')).split('\n')
-
+    def dtpretty(v):
+        return v.strftime('%d/%m/%Y %H:%M') if pd.notnull(v) else 'N/A'
     w.writerow(['Champ','Valeur'])
     w.writerow(['ID Chat', chat_data.get('id_chat','N/A')])
-    w.writerow(['IP', ip_txt])
-    w.writerow(['Date', date_txt])
-    w.writerow(['Antenne', antenne])
-    w.writerow(['Bénévole', volunteer_location])
-    w.writerow(["Temps d'attente", pnd_txt])
-    w.writerow(['Dernier message utilisateur', lum_txt])
-    w.writerow(['Dernier message opérateur', lom_txt])
+    w.writerow(['IP', chat_data.get('IP','N/A')])
+    w.writerow(['Date', dtpretty(chat_data.get('Crée le'))])
+    w.writerow(['Antenne', chat_data.get('Antenne','Inconnue')])
+    w.writerow(['Bénévole', chat_data.get('Volunteer_Location','Inconnu')])
+    w.writerow(["Temps d'attente", dtpretty(chat_data.get('pnd_time'))])
+    w.writerow(['Dernier message utilisateur', dtpretty(chat_data.get('last_user_message'))])
+    w.writerow(['Dernier message opérateur', dtpretty(chat_data.get('last_op_message'))])
     w.writerow([])
     w.writerow(['MESSAGES'])
-    for m in messages:
+    for m in str(chat_data.get('messages','')).split('\n'):
         w.writerow([m])
     return out.getvalue()
 
@@ -582,24 +653,32 @@ def display_calls():
     st.subheader("Filtres")
     c1, c2 = st.columns(2)
     with c1:
-        start_date = st.date_input("Date de début", value=datetime(2025,1,1))
+        start_date = st.date_input("Date de début",
+                                   value=datetime(2025,1,1).date(),
+                                   key="calls_start_date")
     with c2:
-        end_date = st.date_input("Date de fin", value=datetime.now())
+        end_date = st.date_input("Date de fin",
+                                 value=datetime.now().date(),
+                                 key="calls_end_date")
 
     c3, c4 = st.columns(2)
     with c3:
-        start_time = st.time_input('Heure de début', value=datetime.strptime('00:00','%H:%M').time())
+        start_time = st.time_input('Heure de début',
+                                   value=datetime.strptime('00:00','%H:%M').time(),
+                                   key="calls_start_time")
     with c4:
-        end_time = st.time_input('Heure de fin', value=datetime.strptime('23:59','%H:%M').time())
+        end_time = st.time_input('Heure de fin',
+                                 value=datetime.strptime('23:59','%H:%M').time(),
+                                 key="calls_end_time")
 
     c5, c6 = st.columns(2)
     with c5:
         statuts = sorted(df['Statut'].dropna().unique().tolist())
-        statut_selectionne = st.multiselect('Statut', statuts, default=statuts)
+        statut_selectionne = st.multiselect('Statut', statuts, default=statuts, key="calls_statut")
     with c6:
         codes = df['Code_de_cloture'].fillna('(vide)').unique().tolist()
         codes = sorted([c for c in codes if c])
-        code_sel = st.multiselect('Code de clôture', codes, default=codes)
+        code_sel = st.multiselect('Code de clôture', codes, default=codes, key="calls_code_cloture")
 
     mask = (df['Crée le'].dt.date >= start_date) & (df['Crée le'].dt.date <= end_date)
     if statut_selectionne:
@@ -621,7 +700,6 @@ def display_calls():
     total_items = len(filtered)
     paged = load_data_paginated(filtered, st.session_state[key_prefix + "page_number"], PAGE_SIZE)
 
-    # Remplir vides pour affichage
     paged['Code_de_cloture'] = paged['Code_de_cloture'].fillna('(vide)')
 
     st.data_editor(
@@ -637,53 +715,83 @@ def display_calls():
             "Fin appel": st.column_config.TextColumn("Heure de fin")
         },
         hide_index=True,
-        num_rows="dynamic"
+        num_rows="dynamic",
+        key="calls_data_editor"  # clé unique
     )
 
     display_pagination_controls(total_items, PAGE_SIZE, st.session_state[key_prefix + "page_number"], key_prefix=key_prefix)
 
-    if st.sidebar.button("Rafraîchir les données d'appels"):
+    if st.sidebar.button("Rafraîchir les données d'appels", key="refresh_calls_btn"):
         if 'calls_data' in st.session_state: del st.session_state['calls_data']
+        get_calls_data.clear()
         st.rerun()
 
 # ─────────────────────────────────────────────
-# UI : Analyse abus (chargement incrémental)
+# UI : Analyse IA (incrémental + mois en cours)
 # ─────────────────────────────────────────────
 def display_abuse_analysis():
     st.title("Analyse IA des chats potentiellement abusifs")
 
-    # Chargement initial rapide (3 pages par défaut)
-    if 'initial_load' not in st.session_state:
-        st.session_state.initial_load = True
-        df = get_ksaar_data(max_pages=3)
-        st.info("💡 Chargement initial rapide (≈300 derniers chats). Utilisez « Charger plus » pour étendre.")
+    mode = st.radio(
+        "Plage de chargement",
+        ["Mois en cours", "Chargement incrémental"],
+        horizontal=True,
+        key="abuse_load_mode"
+    )
+
+    today = datetime.utcnow().date()
+    if mode == "Mois en cours":
+        df = get_ksaar_data_month(today.year, today.month)
+        if df.empty:
+            st.warning("Aucune donnée trouvée pour le mois en cours.")
+            return
     else:
+        # Chargement initial rapide (3 pages)
+        if 'abuse_initial_load' not in st.session_state:
+            st.session_state.abuse_initial_load = True
+            st.session_state['chat_loaded_pages'] = 3
         df = get_ksaar_data(max_pages=st.session_state.get('chat_loaded_pages', 3))
 
-    if df.empty:
-        st.warning("Aucune donnée de chat n'a pu être récupérée.")
-        return
-
+    # Filtres
     c1, c2 = st.columns(2)
     with c1:
-        start_date = st.date_input("Date de début", value=datetime(2025,1,1))
-        start_time = st.time_input("Heure de début", value=datetime.strptime('00:00','%H:%M').time())
+        start_date = st.date_input(
+            "Date de début",
+            value=(datetime(today.year, today.month, 1).date() if mode=="Mois en cours" else (today - timedelta(days=30))),
+            key="abuse_start_date"
+        )
+        start_time = st.time_input(
+            "Heure de début",
+            value=datetime.strptime('00:00','%H:%M').time(),
+            key="abuse_start_time"
+        )
     with c2:
-        end_date = st.date_input("Date de fin", value=datetime.now())
-        end_time = st.time_input("Heure de fin", value=datetime.strptime('23:59','%H:%M').time())
+        end_date = st.date_input(
+            "Date de fin",
+            value=today,
+            key="abuse_end_date"
+        )
+        end_time = st.time_input(
+            "Heure de fin",
+            value=datetime.strptime('23:59','%H:%M').time(),
+            key="abuse_end_time"
+        )
 
     c3, c4 = st.columns(2)
     with c3:
         antennes = sorted(df['Antenne'].dropna().unique().tolist())
-        selected_antenne = st.multiselect('Antennes', options=['Toutes'] + antennes, default='Toutes')
+        selected_antenne = st.multiselect('Antennes', options=['Toutes'] + antennes, default='Toutes', key="abuse_antennes")
     with c4:
         benevoles = sorted(df['Volunteer_Location'].dropna().unique().tolist())
-        selected_benevole = st.multiselect('Bénévoles', options=['Tous'] + benevoles, default='Tous')
+        selected_benevole = st.multiselect('Bénévoles', options=['Tous'] + benevoles, default='Tous', key="abuse_benevoles")
 
-    search_text = st.text_input("Rechercher dans les messages")
+    search_text = st.text_input("Rechercher dans les messages", key="abuse_search_text")
 
+    # Application filtres
+    # dates
     mask = (df['Crée le'].dt.date >= start_date) & (df['Crée le'].dt.date <= end_date)
-    # filtre heure (gestion overnight)
+
+    # heures (gestion overnight)
     def to_time(x):
         try:
             return x.time()
@@ -713,15 +821,16 @@ def display_abuse_analysis():
     potentially_abusive_df = identify_potentially_abusive_chats(filtered_df)
     if potentially_abusive_df.empty:
         st.warning("Aucun chat potentiellement abusif détecté avec ces filtres.")
-        # Contrôle incrémental
-        _incremental_loader()
+        if mode == "Chargement incrémental":
+            _incremental_loader()
         return
 
-    # Sélection
     potentially_abusive_df = potentially_abusive_df.copy()
     potentially_abusive_df['select'] = False
+
     edited_df = st.data_editor(
         potentially_abusive_df,
+        use_container_width=True,
         column_config={
             "select": st.column_config.CheckboxColumn("Sélectionner", default=False),
             "id_chat": st.column_config.NumberColumn("ID Chat"),
@@ -732,16 +841,18 @@ def display_abuse_analysis():
             "messages": st.column_config.TextColumn("Aperçu du message", width="large")
         },
         column_order=["select","id_chat","Crée le","Antenne","Volunteer_Location","preliminary_score","messages"],
-        use_container_width=True, hide_index=True, height=420
+        hide_index=True,
+        height=420,
+        key="abuse_data_editor"  # clé unique
     )
 
-    # Export unitaire rapide
-    if st.button("Générer des rapports pour les chats sélectionnés"):
+    if st.button("Générer des rapports pour les chats sélectionnés", key="abuse_generate_btn"):
         selected = edited_df[edited_df["select"]].copy()
         if selected.empty:
             st.warning("Veuillez sélectionner au moins un chat.")
         else:
-            df_full = get_ksaar_data(max_pages=st.session_state.get('chat_loaded_pages',3))
+            # prendre la source correspondant au mode
+            df_full = df
             for i, row in selected.iterrows():
                 cid = row.get('id_chat')
                 full_row = df_full[df_full['id_chat'] == cid]
@@ -760,27 +871,25 @@ def display_abuse_analysis():
                     st.download_button("CSV", data=generate_chat_report_csv(chat_data),
                                        file_name=f"rapport_chat_{cid}.csv", mime="text/csv", key=f"dl_csv_{cid}")
 
-    # Contrôle incrémental
-    _incremental_loader()
+    if mode == "Chargement incrémental":
+        _incremental_loader()
 
 def _incremental_loader():
-    # Bouton pour charger plus de pages sans tout recharger
     last_page = st.session_state.get('chat_last_page', None)
     loaded = st.session_state.get('chat_loaded_pages', 3)
     colA, colB = st.columns([1,1])
     with colA:
-        if st.button("🔽 Charger 3 pages de plus"):
+        if st.button("🔽 Charger 3 pages de plus", key="abuse_load_more_btn"):
             new_pages = loaded + 3
             st.session_state['chat_loaded_pages'] = new_pages
-            # purge le cache de get_ksaar_data pour relire plus de pages
-            get_ksaar_data.clear()
-            get_ksaar_data(max_pages=new_pages, force_refresh=True)
+            get_ksaar_data.clear()   # on étend le cache
+            get_ksaar_data(max_pages=new_pages)  # préchauffe
             st.rerun()
     with colB:
         if last_page and loaded < last_page:
             st.caption(f"Pages chargées: {loaded}/{last_page}")
         else:
-            st.caption(f"Pages chargées: {loaded} (toutes les pages disponibles ont été chargées si connu)")
+            st.caption(f"Pages chargées: {loaded} (toutes chargées si connu)")
 
 # ─────────────────────────────────────────────
 # Main
@@ -814,7 +923,7 @@ initial_sidebar_state = "expanded"
         st.write(f"API Base URL: {ksaar_config.get('api_base_url','--')}")
         st.write(f"API Key Name configuré: {'Oui' if ksaar_config.get('api_key_name') else 'Non'}")
         st.write(f"API Key Password configuré: {'Oui' if ksaar_config.get('api_key_password') else 'Non'}")
-        if st.button("🧪 Tester connexion API"):
+        if st.button("🧪 Tester connexion API", key="debug_test_api_btn"):
             try:
                 s = make_session()
                 wf = "deb92463-c3a5-4393-a3bf-1dd29a022cfe"
@@ -833,14 +942,16 @@ initial_sidebar_state = "expanded"
 
     st.title("Dashboard GASAS")
 
-    if st.sidebar.button("🔄 Rafraîchir tout"):
-        for k in ["chat_data","calls_data","abuse_analysis_results","initial_load","chat_loaded_pages","chat_last_page","last_update_chat"]:
+    if st.sidebar.button("🔄 Rafraîchir tout", key="global_refresh_btn"):
+        for k in ["chat_data","calls_data","abuse_analysis_results","abuse_initial_load",
+                  "chat_loaded_pages","chat_last_page","last_update_chat"]:
             if k in st.session_state: del st.session_state[k]
-        get_ksaar_data.clear()   # clear cache_data
+        get_ksaar_data.clear()
         get_calls_data.clear()
+        get_ksaar_data_month.clear()
         st.rerun()
 
-    if st.sidebar.button("🚪 Déconnexion"):
+    if st.sidebar.button("🚪 Déconnexion", key="logout_btn"):
         for k in list(st.session_state.keys()):
             del st.session_state[k]
         st.rerun()
