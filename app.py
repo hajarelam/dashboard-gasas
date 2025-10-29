@@ -32,17 +32,45 @@ import sys
 import nltk
 from textblob import TextBlob
 
-# Télécharger les ressources nécessaires
 @st.cache_resource
 def download_nltk_data():
     try:
-        nltk.download('punkt')
-        nltk.download('averaged_perceptron_tagger')
+        # Vérifier si les ressources sont déjà téléchargées
+        try:
+            nltk.data.find('tokenizers/punkt')
+            nltk.data.find('taggers/averaged_perceptron_tagger')
+        except LookupError:
+            # Télécharger seulement si non présent
+            nltk.download('punkt', quiet=True)
+            nltk.download('averaged_perceptron_tagger', quiet=True)
     except Exception as e:
         st.warning(f"Impossible de télécharger les ressources NLTK : {str(e)}")
 
 # Initialiser les ressources
 download_nltk_data()
+
+@st.cache_resource
+def compile_abuse_patterns():
+    """Compile les patterns de détection d'abus une seule fois."""
+    abuse_keywords = [
+        "sexe", "bite", "penis", "vagin", "masturb", "bander", "sucer", "baiser",
+        "jouir", "éjacul", "ejacul", "orgasm", "porno", "cul", "nichon", "seins",
+        "sexe", "bite", "queue", "pénis", "penis", "zboub", "vagin", "chatte", "cunni",
+        "masturb", "branler", "branlette", "fap", "fellation", "pipe", "sucer",
+        "bander", "gode", "godemichet", "baiser", "ken", "niquer", "niqué", "niquee",
+        "sodom", "sodomie", "anal", "dp", "orgie", "orgasm", "orgasme", "jouir",
+        "gicler", "giclée", "éjacul", "ejacul", "cum", "creampie", "facial", "porno",
+        "porn", "xxx", "cul", "nichon", "nichons", "sein", "seins", "boobs", "boobies",
+        "téton", "tétons", "nipple", "photo", "nue", "nu", "déshabille", "deshabille",
+        "montre-moi", "montre moi", "caméra", "camera", "vidéo", "video", "snapchat",
+        "instagram", "facebook", "onlyfans", "strip", "striptease", "strip tease",
+        "connard", "salope", "pute", "enculé", "encule", "pd", "tapette", "nègre",
+        "negre", "bougnoule", "suicide", "tuer", "mourir", "crever", "adresse",
+        "menace", "frapper", "battre", "harcèle", "harcele", "stalker"
+    ]
+    # Créer un pattern regex compilé pour une recherche plus rapide
+    pattern = re.compile('|'.join(map(re.escape, abuse_keywords)), re.IGNORECASE)
+    return pattern, abuse_keywords
 
 # Fonction pour charger les données par pages
 def load_data_paginated(data, page_number, page_size):
@@ -225,85 +253,32 @@ def get_operator_name(operator_id):
     
     # Mapping des IDs vers les noms d'opérateurs
     operator_mapping = {
-        1: "admin",
-        2: "NightlineParis1",
-        3: "NightlineParis2",
-        4: "NightlineParis3",
-        5: "NightlineParis4",
-        6: "NightlineParis5",
-        7: "NightlineLyon1",
-        9: "NightlineParis6",
-        12: "NightlineAnglophone1",
-        13: "NightlineAnglophone2",
-        14: "NightlineAnglophone3",
-        16: "NightlineSaclay1",
-        18: "NightlineSaclay3",
-        19: "NightlineParis7",
-        20: "NightlineParis8",
-        21: "NightlineLyon2",
-        22: "NightlineLyon3",
-        26: "NightlineSaclay2",
-        30: "NightlineSaclay4",
-        31: "NightlineSaclay5",
-        32: "NightlineSaclay6",
-        33: "NightlineLyon4",
-        34: "NightlineLyon5",
-        35: "NightlineLyon6",
-        36: "NightlineLyon7",
-        37: "NightlineLyon8",
-        38: "NightlineSaclay7",
-        40: "NightlineParis9",
-        42: "NightlineFormateur1",
-        43: "NightlineAnglophone4",
-        44: "NightlineAnglophone5",
-        45: "NightlineParis10",
-        46: "NightlineParis11",
-        47: "NightlineToulouse1",
-        48: "NightlineToulouse2",
-        49: "NightlineToulouse3",
-        50: "NightlineToulouse4",
-        51: "NightlineToulouse5",
-        52: "NightlineToulouse6",
-        53: "NightlineToulouse7",
-        54: "NightlineAngers1",
-        55: "NightlineAngers2",
-        56: "NightlineAngers3",
-        57: "NightlineAngers4",
-        58: "doubleecoute",
-        59: "NightlineNantes1",
-        60: "NightlineNantes2",
-        61: "NightlineNantes3",
-        62: "NightlineNantes4",
-        63: "NightlineRouen1",
-        64: "NightlineRouen2",
-        65: "NightlineRouen3",
-        67: "NightlineRouen4",
-        68: "NightlineNantes5",
-        69: "NightlineNantes6",
-        70: "NightlineAngers5",
-        71: "NightlineAngers6",
-        72: "NightlineRouen5",
-        73: "NightlineRouen6",
-        74: "NightlineAngers7",
-        75: "NightlineLyon9",
-        76: "NightlineReims",
-        77: "NightlineToulouse8",
-        78: "NightlineToulouse9",
-        79: "NightlineReims1",
-        80: "NightlineReims2",
-        81: "NightlineReims3",
-        82: "NightlineReims4",
-        83: "NightlineReims5",
-        84: "NightlineLille1",
-        85: "NightlineLille2",
-        86: "NightlineLille3",
-        87: "NightlineLille4",
-        88: "NightlineRouen7",
-        89: "NightlineRouen8",
-        90: "NightlineRouen9",
-        91: "NightlineRouen10",
-        92: "NightlineRouen11",
-        93: "NightlineRouen12"
+        1: "admin", 2: "NightlineParis1", 3: "NightlineParis2", 4: "NightlineParis3",
+        5: "NightlineParis4", 6: "NightlineParis5", 7: "NightlineLyon1", 9: "NightlineParis6",
+        12: "NightlineAnglophone1", 13: "NightlineAnglophone2", 14: "NightlineAnglophone3",
+        16: "NightlineSaclay1", 18: "NightlineSaclay3", 19: "NightlineParis7",
+        20: "NightlineParis8", 21: "NightlineLyon2", 22: "NightlineLyon3",
+        26: "NightlineSaclay2", 30: "NightlineSaclay4", 31: "NightlineSaclay5",
+        32: "NightlineSaclay6", 33: "NightlineLyon4", 34: "NightlineLyon5",
+        35: "NightlineLyon6", 36: "NightlineLyon7", 37: "NightlineLyon8",
+        38: "NightlineSaclay7", 40: "NightlineParis9", 42: "NightlineFormateur1",
+        43: "NightlineAnglophone4", 44: "NightlineAnglophone5", 45: "NightlineParis10",
+        46: "NightlineParis11", 47: "NightlineToulouse1", 48: "NightlineToulouse2",
+        49: "NightlineToulouse3", 50: "NightlineToulouse4", 51: "NightlineToulouse5",
+        52: "NightlineToulouse6", 53: "NightlineToulouse7", 54: "NightlineAngers1",
+        55: "NightlineAngers2", 56: "NightlineAngers3", 57: "NightlineAngers4",
+        58: "doubleecoute", 59: "NightlineNantes1", 60: "NightlineNantes2",
+        61: "NightlineNantes3", 62: "NightlineNantes4", 63: "NightlineRouen1",
+        64: "NightlineRouen2", 65: "NightlineRouen3", 67: "NightlineRouen4",
+        68: "NightlineNantes5", 69: "NightlineNantes6", 70: "NightlineAngers5",
+        71: "NightlineAngers6", 72: "NightlineRouen5", 73: "NightlineRouen6",
+        74: "NightlineAngers7", 75: "NightlineLyon9", 76: "NightlineReims",
+        77: "NightlineToulouse8", 78: "NightlineToulouse9", 79: "NightlineReims1",
+        80: "NightlineReims2", 81: "NightlineReims3", 82: "NightlineReims4",
+        83: "NightlineReims5", 84: "NightlineLille1", 85: "NightlineLille2",
+        86: "NightlineLille3", 87: "NightlineLille4", 88: "NightlineRouen7",
+        89: "NightlineRouen8", 90: "NightlineRouen9", 91: "NightlineRouen10",
+        92: "NightlineRouen11", 93: "NightlineRouen12"
     }
     
     # Retourner le nom correspondant à l'ID, ou "Inconnu" si l'ID n'est pas dans le mapping
@@ -350,25 +325,67 @@ def get_volunteer_location(operator_name):
     else:
         return "Autre"
 
-# Ajout du cache pour les données
-@st.cache_data(ttl=3600)  # Cache d'une heure
-def get_ksaar_data():
-    """Récupère les données depuis l'API Ksaar avec le bon workflow ID."""
+def get_antenne_from_dst(dst):
+    """
+    Mappe le numéro de destination (dst) vers le nom de l'antenne
+    selon la logique DAX fournie.
+    """
+    if pd.isna(dst) or dst is None or dst == "":
+        return None
+    
+    dst_str = str(dst).strip().replace("+", "").replace(".0", "").replace(" ", "")
+    
+    # Mapping des numéros vers les antennes
+    if dst_str in ["33999011163", "33999011065"]:
+        return "Lille"
+    elif dst_str in ["33999011073"]:
+        return "Marseille"
+    elif dst_str in ["33999011198", "33999011066"]:
+        return "Lyon"
+    elif dst_str in ["33999011201", "33999011068"]:
+        return "Paris"
+    elif dst_str in ["33999011263", "33999011072"]:
+        return "Toulouse"
+    elif dst_str in ["33999011261", "33999011070"]:
+        return "Reims"
+    elif dst_str in ["33999011199", "33999011067"]:
+        return "Normandie"
+    elif dst_str in ["33999011074"]:
+        return "National_Fr_Hors_Zone"
+    elif dst_str in ["33999011262", "33999011071"]:
+        return "Saclay"
+    elif dst_str in ["33999011215", "33999011069"]:
+        return "Pays de la Loire"
+    else:
+        return None
+
+@st.cache_data(ttl=7200)  # Cache de 2 heures au lieu d'1 heure
+def get_ksaar_data(force_refresh=False):
+    """
+    Récupère les données depuis l'API Ksaar avec le bon workflow ID.
+    
+    Args:
+        force_refresh: Force le rechargement même si en cache
+    """
     try:
         # Vérifier si les données sont en cache et si elles ont plus de 5 minutes
-        if ('chat_data' not in st.session_state or 
-            'last_update' not in st.session_state or 
-            (datetime.now() - st.session_state['last_update']).total_seconds() > 300):
+        cache_valid = ('chat_data' in st.session_state and 
+                      'last_update' in st.session_state and 
+                      (datetime.now() - st.session_state['last_update']).total_seconds() <= 300)
+        
+        if cache_valid and not force_refresh:
+            return st.session_state['chat_data']
             
-            # Utiliser le bon workflow ID pour les chats
-            workflow_id = "1500d159-5185-4487-be1f-fa18c6c85ec5"
-            url = f"{ksaar_config['api_base_url']}/v1/workflows/{workflow_id}/records"
-            auth = (ksaar_config['api_key_name'], ksaar_config['api_key_password'])
-            
-            all_records = []
-            current_page = 1
-            
-            try:
+        # Utiliser le bon workflow ID pour les chats
+        workflow_id = "1500d159-5185-4487-be1f-fa18c6c85ec5"
+        url = f"{ksaar_config['api_base_url']}/v1/workflows/{workflow_id}/records"
+        auth = (ksaar_config['api_key_name'], ksaar_config['api_key_password'])
+        
+        all_records = []
+        current_page = 1
+        
+        try:
+            with st.spinner(f'Chargement des données... Page {current_page}'):
                 while True:
                     params = {
                         "page": current_page,
@@ -421,226 +438,126 @@ def get_ksaar_data():
                     else:
                         st.error(f"Erreur lors de la récupération des données: {response.status_code}")
                         return pd.DataFrame()
-            except Exception as e:
-                st.error(f"Erreur lors de la connexion à l'API: {str(e)}")
-                return pd.DataFrame()
+        except Exception as e:
+            st.error(f"Erreur lors de la connexion à l'API: {str(e)}")
+            return pd.DataFrame()
 
-            if not all_records:
-                st.warning("Aucun enregistrement trouvé dans la réponse de l'API.")
-                return pd.DataFrame()
-            
-            df = pd.DataFrame(all_records)
-            
-            # Conversion des colonnes de date
-            date_columns = ['Crée le', 'Modifié le', 'pnd_time', 'last_user_message', 'last_op_message']
-            for col in date_columns:
-                if col in df.columns:
-                    df[col] = pd.to_datetime(df[col], errors='coerce')
-            
-            # Stocker dans le cache avec l'horodatage
-            st.session_state['chat_data'] = df
-            st.session_state['last_update'] = datetime.now()
+        if not all_records:
+            st.warning("Aucun enregistrement trouvé dans la réponse de l'API.")
+            return pd.DataFrame()
         
-        return st.session_state['chat_data']
+        df = pd.DataFrame(all_records)
+        
+        # Conversion des colonnes de date
+        date_columns = ['Crée le', 'Modifié le', 'pnd_time', 'last_user_message', 'last_op_message']
+        for col in date_columns:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors='coerce')
+        
+        # Stocker dans le cache avec l'horodatage
+        st.session_state['chat_data'] = df
+        st.session_state['last_update'] = datetime.now()
+        
+        return df
             
     except Exception as e:
         st.error(f"Erreur lors de la connexion à l'API: {str(e)}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=3600)  # Cache d'une heure
-def get_calls_data():
+@st.cache_data(ttl=7200)  # Cache de 2 heures
+def get_calls_data(force_refresh=False):
     """Récupère les données d'appels depuis l'API Ksaar."""
     try:
-        if 'calls_data' not in st.session_state:
-            # Utiliser le workflow ID pour les appels
-            workflow_id = "deb92463-c3a5-4393-a3bf-1dd29a022cfe"
-            url = f"{ksaar_config['api_base_url']}/v1/workflows/{workflow_id}/records"
-            auth = (ksaar_config['api_key_name'], ksaar_config['api_key_password'])
+        if 'calls_data' in st.session_state and not force_refresh:
+            return st.session_state['calls_data']
             
-            all_records = []
-            current_page = 1
-            
-            while True:
-                params = {
-                    "page": current_page,
-                    "limit": 100
-                }
-
-                response = requests.get(url, params=params, auth=auth)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    records = data.get('results', [])
-                    if not records:
-                        break
-                    
-                    for record in records:
-                        # Extraire les heures des timestamps
-                        def extract_time(timestamp):
-                            if timestamp:
-                                try:
-                                    # Convertir le timestamp en datetime
-                                    dt = datetime.strptime(timestamp, '%Y-%m-%dT%H:%M:%S.%fZ')
-                                    # Retourner uniquement l'heure au format HH:MM
-                                    return dt.strftime('%H:%M')
-                                except:
-                                    return None
-                            return None
-                        
-                        record_data = {
-                            'Crée le': record.get('createdAt'),
-                            'Nom': record.get('from_name', ''),
-                            'Numéro': record.get('from_number', ''),
-                            'Statut': record.get('disposition', ''),
-                            'Début appel': extract_time(record.get('answer')),
-                            'Fin appel': extract_time(record.get('end'))
-                        }
-                        
-                        # Normaliser l'antenne pour les appels aussi
-                        if 'from_name' in record and record['from_name']:
-                            record_data['Antenne'] = get_normalized_antenne(record['from_name'])
-                        else:
-                            record_data['Antenne'] = "Inconnue"
-                            
-                        all_records.append(record_data)
-                    
-                    if current_page >= data.get('lastPage', 1):
-                        break
-                    current_page += 1
-                else:
-                    st.error(f"Erreur lors de la récupération des données: {response.status_code}")
-                    return pd.DataFrame()
-
-            if not all_records:
-                return pd.DataFrame()
-            
-            df = pd.DataFrame(all_records)
-            
-            if not df.empty:
-                # Conversion de la colonne 'Crée le'
-                df['Crée le'] = pd.to_datetime(df['Crée le'])
-                
-                # Filtrer les données à partir de janvier 2025
-                df = df[df['Crée le'] >= '2025-01-01']
-            
-            st.session_state['calls_data'] = df
+        # Utiliser le workflow ID pour les appels
+        workflow_id = "deb92463-c3a5-4393-a3bf-1dd29a022cfe"
+        url = f"{ksaar_config['api_base_url']}/v1/workflows/{workflow_id}/records"
+        auth = (ksaar_config['api_key_name'], ksaar_config['api_key_password'])
         
-        return st.session_state['calls_data']
+        all_records = []
+        current_page = 1
+        
+        while True:
+            params = {
+                "page": current_page,
+                "limit": 100
+            }
+
+            response = requests.get(url, params=params, auth=auth)
+            
+            if response.status_code == 200:
+                data = response.json()
+                records = data.get('results', [])
+                if not records:
+                    break
+                
+                for record in records:
+                    # Extraire les heures des timestamps
+                    def extract_time(timestamp):
+                        if timestamp:
+                            try:
+                                # Convertir le timestamp en datetime
+                                dt = datetime.strptime(timestamp, '%Y-%m-%dT%H:%M:%S.%fZ')
+                                # Retourner uniquement l'heure au format HH:MM
+                                return dt.strftime('%H:%M')
+                            except:
+                                return None
+                        return None
+                    
+                    dst = record.get('dst', '')
+                    
+                    record_data = {
+                        'Crée le': record.get('createdAt'),
+                        'Nom': record.get('from_name', ''),
+                        'Numéro': record.get('from_number', ''),
+                        'Statut': record.get('disposition', ''),
+                        'Code_de_cloture': record.get('Code_de_cloture', ''),
+                        'Début appel': extract_time(record.get('answer')),
+                        'Fin appel': extract_time(record.get('end')),
+                        'dst': dst  # Ajouter dst pour le débogage
+                    }
+                    
+                    antenne_from_dst = get_antenne_from_dst(dst)
+                    
+                    if antenne_from_dst:
+                        # Si on a trouvé une antenne via dst, l'utiliser
+                        record_data['Antenne'] = antenne_from_dst
+                    elif 'from_name' in record and record['from_name']:
+                        # Sinon, utiliser from_name comme avant
+                        record_data['Antenne'] = get_normalized_antenne(record['from_name'])
+                    else:
+                        record_data['Antenne'] = "Inconnue"
+                        
+                    all_records.append(record_data)
+                
+                if current_page >= data.get('lastPage', 1):
+                    break
+                current_page += 1
+            else:
+                st.error(f"Erreur lors de la récupération des données: {response.status_code}")
+                return pd.DataFrame()
+
+        if not all_records:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(all_records)
+        
+        if not df.empty:
+            # Conversion de la colonne 'Crée le'
+            df['Crée le'] = pd.to_datetime(df['Crée le'])
+            
+            # Filtrer les données à partir de janvier 2025
+            df = df[df['Crée le'] >= '2025-01-01']
+        
+        st.session_state['calls_data'] = df
+        
+        return df
             
     except Exception as e:
         st.error(f"Erreur lors de la connexion à l'API: {str(e)}")
         return pd.DataFrame()
-
-def generate_chat_report(chat_data):
-    """Génère un rapport HTML pour un chat avec les informations d'antenne et de bénévole."""
-    # Récupérer l'antenne et la localisation du bénévole
-    antenne = chat_data.get('Antenne', 'Inconnue')
-    volunteer_location = chat_data.get('Volunteer_Location', 'Inconnu')
-    
-    html_template = f"""
-    <html>
-    <head>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; }}
-            .header {{ background-color: #f8f9fa; padding: 20px; border-radius: 5px; }}
-            .chat-info {{ margin: 20px 0; }}
-            .messages {{ white-space: pre-wrap; background-color: white; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h2>Rapport de Chat Nightline</h2>
-            <p><strong>ID Chat:</strong> {chat_data['id_chat']}</p>
-            <p><strong>IP:</strong> {chat_data['IP']}</p>
-            <p><strong>Date:</strong> {chat_data['Crée le'].strftime('%d/%m/%Y %H:%M')}</p>
-            <p><strong>Antenne:</strong> {antenne}</p>
-            <p><strong>Bénévole:</strong> {volunteer_location}</p>
-        </div>
-        <div class="chat-info">
-            <p><strong>Temps d'attente:</strong> {chat_data['pnd_time'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['pnd_time']) else 'N/A'}</p>
-            <p><strong>Dernier message utilisateur:</strong> {chat_data['last_user_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_user_message']) else 'N/A'}</p>
-            <p><strong>Dernier message opérateur:</strong> {chat_data['last_op_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_op_message']) else 'N/A'}</p>
-        </div>
-        <div class="messages">
-            <h3>Messages:</h3>
-            {chat_data['messages']}
-        </div>
-    </body>
-    </html>
-    """
-    return html_template
-
-def generate_chat_report_txt(chat_data):
-    """Génère un rapport TXT pour un chat avec les informations d'antenne et de bénévole."""
-    # Récupérer l'antenne et la localisation du bénévole
-    antenne = chat_data.get('Antenne', 'Inconnue')
-    volunteer_location = chat_data.get('Volunteer_Location', 'Inconnu')
-    
-    # Créer le contenu du rapport en format texte
-    txt_content = f"""
-RAPPORT DE CHAT NIGHTLINE
-=========================
-
-ID Chat: {chat_data['id_chat']}
-IP: {chat_data['IP']}
-Date: {chat_data['Crée le'].strftime('%d/%m/%Y %H:%M')}
-Antenne: {antenne}
-Bénévole: {volunteer_location}
-
-INFORMATIONS SUPPLÉMENTAIRES
-===========================
-Temps d'attente: {chat_data['pnd_time'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['pnd_time']) else 'N/A'}
-Dernier message utilisateur: {chat_data['last_user_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_user_message']) else 'N/A'}
-Dernier message opérateur: {chat_data['last_op_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_op_message']) else 'N/A'}
-
-MESSAGES
-========
-{chat_data['messages']}
-"""
-    return txt_content
-
-def generate_chat_report_csv(chat_data):
-    """Génère un rapport CSV pour un chat avec les informations d'antenne et de bénévole."""
-    import io
-    import csv
-    
-    # Récupérer l'antenne et la localisation du bénévole
-    antenne = chat_data.get('Antenne', 'Inconnue')
-    volunteer_location = chat_data.get('Volunteer_Location', 'Inconnu')
-    
-    # Créer un buffer pour stocker les données CSV
-    output = io.StringIO()
-    writer = csv.writer(output)
-    
-    # Écrire les en-têtes
-    writer.writerow(['Champ', 'Valeur'])
-    
-    # Écrire les informations du chat
-    writer.writerow(['ID Chat', chat_data['id_chat']])
-    writer.writerow(['IP', chat_data['IP']])
-    writer.writerow(['Date', chat_data['Crée le'].strftime('%d/%m/%Y %H:%M')])
-    writer.writerow(['Antenne', antenne])
-    writer.writerow(['Bénévole', volunteer_location])
-    writer.writerow(['Temps d\'attente', chat_data['pnd_time'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['pnd_time']) else 'N/A'])
-    writer.writerow(['Dernier message utilisateur', chat_data['last_user_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_user_message']) else 'N/A'])
-    writer.writerow(['Dernier message opérateur', chat_data['last_op_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_op_message']) else 'N/A'])
-    
-    # Ajouter une ligne vide
-    writer.writerow([])
-    
-    # Écrire les messages
-    writer.writerow(['MESSAGES'])
-    
-    # Diviser les messages par ligne et les écrire
-    messages = str(chat_data['messages']).split('\n')
-    for message in messages:
-        writer.writerow([message])
-    
-    # Récupérer le contenu du buffer
-    csv_content = output.getvalue()
-    output.close()
-    
-    return csv_content
 
 def display_calls_filters():
     """Affiche les filtres pour les appels dans la sidebar avec support des antennes."""
@@ -738,85 +655,157 @@ def display_pagination_controls(total_items, page_size, current_page, key_prefix
                 st.rerun()
 
 def display_calls():
-    """Affiche les données des appels avec support des antennes."""
+    """Affiche les données des appels avec support des antennes et code de clôture."""
     df = get_calls_data()
     
     if df.empty:
         st.warning("Aucune donnée d'appel n'a pu être récupérée.")
         return
     
-    # Récupérer les filtres
-    filters = display_calls_filters()
-    if filters:
-        # Application des filtres de date et statut
-        mask = (df['Crée le'].dt.date >= filters['start_date']) & \
-               (df['Crée le'].dt.date <= filters['end_date'])
-        
-        if filters['statut']:
-            mask &= df['Statut'].isin(filters['statut'])
-        
-        # Ajout du filtre d'antenne
-        if filters['antenne'] != 'Toutes les antennes':
-            mask &= (df['Antenne'] == filters['antenne'])
-        
-        filtered_df = df[mask].copy()
-        
-        # Affichage des statistiques
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Nombre total d'appels", len(filtered_df))
-        with col2:
-            st.metric("Période", f"{filters['start_date'].strftime('%d/%m/%Y')} - {filters['end_date'].strftime('%d/%m/%Y')}")
-        with col3:
-            if 'start_time' in filters and 'end_time' in filters:
-                st.metric("Plage horaire", f"{filters['start_time'].strftime('%H:%M')} - {filters['end_time'].strftime('%H:%M')}")
-        
-        # Pagination
-        if 'calls_page_number' not in st.session_state:
-            st.session_state.calls_page_number = 0
-        
-        PAGE_SIZE = 50
-        
-        # Pagination des données
-        total_items = len(filtered_df)
-        paginated_data = load_data_paginated(filtered_df, st.session_state.calls_page_number, PAGE_SIZE)
-        
-        # Afficher les données paginées dans un data_editor
-        edited_df = st.data_editor(
-            paginated_data,
-            use_container_width=True,
-            column_config={
-                "select": st.column_config.CheckboxColumn("Sélectionner", default=False),
-                "Crée le": st.column_config.DatetimeColumn("Date", format="DD/MM/YYYY HH:mm"),
-                "Antenne": st.column_config.TextColumn("Antenne"),
-                "Numéro": st.column_config.TextColumn("Numéro"),
-                "Statut": st.column_config.TextColumn("Statut"),
-                "Début appel": st.column_config.TextColumn("Heure de début"),
-                "Fin appel": st.column_config.TextColumn("Heure de fin")
-            },
-            hide_index=True,
-            num_rows="dynamic"
+    
+    st.subheader("Filtres")
+    
+    # Configuration des dates par défaut
+    default_start_date = datetime(2025, 1, 1)
+    default_end_date = datetime.now()
+    
+    # Filtres de date
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input(
+            "Date de début",
+            value=default_start_date,
+            min_value=datetime(2025, 1, 1).date(),
+            max_value=default_end_date,
+            key="calls_start_date"
         )
+    with col2:
+        end_date = st.date_input(
+            "Date de fin",
+            value=default_end_date,
+            min_value=start_date,
+            max_value=default_end_date,
+            key="calls_end_date"
+        )
+    
+    # Filtres d'heure
+    col1, col2 = st.columns(2)
+    with col1:
+        start_time = st.time_input('Heure de début', value=datetime.strptime('00:00', '%H:%M').time(), key="calls_start_time")
+    with col2:
+        end_time = st.time_input('Heure de fin', value=datetime.strptime('23:59', '%H:%M').time(), key="calls_end_time")
+    
+    # Filtres supplémentaires
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        statuts_uniques = sorted(df['Statut'].unique().tolist())
+        statut_selectionne = st.multiselect(
+            'Statut',
+            statuts_uniques,
+            default=statuts_uniques,
+            key="calls_statut"
+        )
+    
+    with col2:
+        # Récupérer les valeurs uniques de Code_de_cloture, en incluant les valeurs vides
+        codes_cloture_uniques = df['Code_de_cloture'].fillna('(vide)').unique().tolist()
+        codes_cloture_uniques = sorted([code for code in codes_cloture_uniques if code])
         
-        # Afficher les contrôles de pagination avec un préfixe unique
-        display_pagination_controls(total_items, PAGE_SIZE, st.session_state.calls_page_number, key_prefix="calls_")
-        
-        # Bouton pour analyser les appels sélectionnés
-        if st.button("Analyser les appels sélectionnés"):
-            selected_calls = edited_df[edited_df["select"]].copy()
-            if not selected_calls.empty:
-                st.write("### Analyse des appels sélectionnés")
-                for _, call in selected_calls.iterrows():
-                    st.write("#### Détails de l'appel")
-                    st.write(f"Date: {call['Crée le']}")
-                    st.write(f"Antenne: {call['Antenne']}")
-                    st.write(f"Numéro: {call['Numéro']}")
-                    st.write(f"Statut: {call['Statut']}")
-                    if pd.notnull(call['Début appel']):
-                        st.write(f"Heure de début: {call['Début appel']}")
-                    if pd.notnull(call['Fin appel']):
-                        st.write(f"Heure de fin: {call['Fin appel']}")
-                    st.write("---")
+        code_cloture_selectionne = st.multiselect(
+            'Code de clôture',
+            codes_cloture_uniques,
+            default=codes_cloture_uniques,
+            key="calls_code_cloture"
+        )
+    
+    st.divider()
+    
+    filters = {
+        'start_date': start_date,
+        'end_date': end_date,
+        'start_time': start_time,
+        'end_time': end_time,
+        'statut': statut_selectionne,
+        'code_cloture': code_cloture_selectionne
+    }
+    
+    # Application des filtres de date et statut
+    mask = (df['Crée le'].dt.date >= filters['start_date']) & \
+           (df['Crée le'].dt.date <= filters['end_date'])
+    
+    if filters['statut']:
+        mask &= df['Statut'].isin(filters['statut'])
+    
+    
+    if filters['code_cloture']:
+        # Gérer les valeurs vides
+        code_mask = df['Code_de_cloture'].fillna('(vide)').isin(filters['code_cloture'])
+        mask &= code_mask
+    
+    filtered_df = df[mask].copy()
+    
+    # Affichage des statistiques
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Nombre total d'appels", len(filtered_df))
+    with col2:
+        st.metric("Période", f"{filters['start_date'].strftime('%d/%m/%Y')} - {filters['end_date'].strftime('%d/%m/%Y')}")
+    with col3:
+        if 'start_time' in filters and 'end_time' in filters:
+            st.metric("Plage horaire", f"{filters['start_time'].strftime('%H:%M')} - {filters['end_time'].strftime('%H:%M')}")
+    
+    # Pagination
+    if 'calls_page_number' not in st.session_state:
+        st.session_state.calls_page_number = 0
+    
+    PAGE_SIZE = 50
+    
+    # Pagination des données
+    total_items = len(filtered_df)
+    paginated_data = load_data_paginated(filtered_df, st.session_state.calls_page_number, PAGE_SIZE)
+    
+    # Remplacer les valeurs vides par "(vide)" pour l'affichage
+    paginated_data['Code_de_cloture'] = paginated_data['Code_de_cloture'].fillna('(vide)')
+    
+    # Afficher les données paginées dans un data_editor
+    edited_df = st.data_editor(
+        paginated_data,
+        use_container_width=True,
+        column_config={
+            "select": st.column_config.CheckboxColumn("Sélectionner", default=False),
+            "Crée le": st.column_config.DatetimeColumn("Date", format="DD/MM/YYYY HH:mm"),
+            "Nom": st.column_config.TextColumn("Antenne"),  # Afficher 'Nom' comme 'Antenne'
+            "Numéro": st.column_config.TextColumn("Numéro"),
+            "Statut": st.column_config.TextColumn("Statut"),
+            "Code_de_cloture": st.column_config.TextColumn("Code de clôture"),
+            "Début appel": st.column_config.TextColumn("Heure de début"),
+            "Fin appel": st.column_config.TextColumn("Heure de fin")
+        },
+        hide_index=True,
+        num_rows="dynamic"
+    )
+    
+    # Afficher les contrôles de pagination avec un préfixe unique
+    display_pagination_controls(total_items, PAGE_SIZE, st.session_state.calls_page_number, key_prefix="calls_")
+    
+    # Bouton pour analyser les appelsSelected
+    if st.button("Analyser les appelsSelected"):
+        selected_calls = edited_df[edited_df["select"]].copy()
+        if not selected_calls.empty:
+            st.write("### Analyse des appelsSelected")
+            for _, call in selected_calls.iterrows():
+                st.write("#### Détails de l'appel")
+                st.write(f"Date: {call['Crée le']}")
+                st.write(f"Antenne: {call['Nom']}")  # Utiliser 'Nom' au lieu de 'Antenne'
+                st.write(f"Numéro: {call['Numéro']}")
+                st.write(f"Statut: {call['Statut']}")
+                st.write(f"Code de clôture: {call['Code_de_cloture']}")
+                if pd.notnull(call['Début appel']):
+                    st.write(f"Heure de début: {call['Début appel']}")
+                if pd.notnull(call['Fin appel']):
+                    st.write(f"Heure de fin: {call['Fin appel']}")
+                st.write("---")
 
     if st.sidebar.button("Rafraîchir les données d'appels", key="refresh_calls"):
         if 'calls_data' in st.session_state:
@@ -825,7 +814,12 @@ def display_calls():
 
 def display_chats():
     """Affiche les données des chats avec les filtres."""
-    df = get_ksaar_data()
+    if 'initial_load' not in st.session_state:
+        st.session_state.initial_load = True
+        df = get_ksaar_data(max_pages=5)
+        st.info("💡 Chargement initial rapide (500 derniers chats). Utilisez les filtres ou rafraîchissez pour charger plus de données.")
+    else:
+        df = get_ksaar_data()
     
     if df.empty:
         st.warning("Aucune donnée de chat n'a pu être récupérée.")
@@ -938,11 +932,11 @@ def display_chats():
     # Afficher les contrôles de pagination avec un préfixe unique
     display_pagination_controls(total_items, PAGE_SIZE, st.session_state.page_number, key_prefix="chats_")
     
-    # Bouton pour analyser les chats sélectionnés
-    if st.button("Analyser les chats sélectionnés"):
+    # Bouton pour analyser les chatsSelected
+    if st.button("Analyser les chatsSelected"):
         selected_chats = edited_df[edited_df["select"]].copy()
         if not selected_chats.empty:
-            st.write("### Analyse des chats sélectionnés")
+            st.write("### Analyse des chatsSelected")
             for _, chat in selected_chats.iterrows():
                 st.write(f"#### Chat {chat['id_chat']}")
                 st.write(f"Date: {chat['Crée le']}")
@@ -956,33 +950,29 @@ def display_abuse_analysis():
     """Affiche d'abord tous les chats potentiellement abusifs, puis permet l'analyse détaillée."""
     st.title("Analyse IA des chats potentiellement abusifs")
     
-    # Récupérer les données de chat
     df = get_ksaar_data()
     
     if df.empty:
         st.warning("Aucune donnée de chat n'a pu être récupérée.")
         return
     
-    # Créer une sidebar pour les filtres
-    st.sidebar.header("Filtres d'analyse des abus")
+    st.subheader("Filtres")
     
     # Filtres de date
-    st.sidebar.subheader("Filtres de date")
-    date_col1, date_col2 = st.sidebar.columns(2)
-    with date_col1:
+    col1, col2 = st.columns(2)
+    with col1:
         start_date = st.date_input("Date de début", value=datetime(2025, 1, 1).date(), key="abuse_start_date")
-    with date_col2:
+    with col2:
         end_date = st.date_input("Date de fin", value=datetime.now().date(), key="abuse_end_date")
     
     # Filtres d'heure
-    st.sidebar.subheader("Filtres d'heure")
-    use_time_filter = st.sidebar.checkbox("Activer le filtre d'heure", key="use_time_filter")
+    use_time_filter = st.checkbox("Activer le filtre d'heure", key="use_time_filter")
     
     if use_time_filter:
-        time_col1, time_col2 = st.sidebar.columns(2)
-        with time_col1:
+        col1, col2 = st.columns(2)
+        with col1:
             start_time = st.time_input("Heure de début", value=datetime.strptime('00:00', '%H:%M').time(), key="abuse_start_time")
-        with time_col2:
+        with col2:
             end_time = st.time_input("Heure de fin", value=datetime.strptime('23:59', '%H:%M').time(), key="abuse_end_time")
     else:
         # Valeurs par défaut si le filtre n'est pas activé (toute la journée)
@@ -990,32 +980,37 @@ def display_abuse_analysis():
         end_time = datetime.strptime('23:59', '%H:%M').time()
     
     # Filtres par antenne et bénévole
-    st.sidebar.subheader("Filtres par antenne et bénévole")
+    col1, col2 = st.columns(2)
     
-    # Filtre par antenne
-    antennes = sorted(df['Antenne'].dropna().unique().tolist())
-    selected_antenne = st.sidebar.multiselect(
-        'Antennes', 
-        options=['Toutes'] + antennes, 
-        default='Toutes', 
-        key="abuse_filter_antennes"
-    )
+    with col1:
+        # Filtre par antenne
+        antennes = sorted(df['Antenne'].dropna().unique().tolist())
+        selected_antenne = st.multiselect(
+            'Antennes', 
+            options=['Toutes'] + antennes, 
+            default='Toutes', 
+            key="abuse_filter_antennes"
+        )
     
-    # Filtre par bénévole
-    benevoles = sorted(df['Volunteer_Location'].dropna().unique().tolist())
-    selected_benevole = st.sidebar.multiselect(
-        'Bénévoles', 
-        options=['Tous'] + benevoles, 
-        default='Tous', 
-        key="abuse_filter_benevoles"
-    )
+    with col2:
+        # Filtre par bénévole
+        benevoles = sorted(df['Volunteer_Location'].dropna().unique().tolist())
+        selected_benevole = st.multiselect(
+            'Bénévoles', 
+            options=['Tous'] + benevoles, 
+            default='Tous', 
+            key="abuse_filter_benevoles"
+        )
     
     # Recherche de mots dans les messages
-    st.sidebar.subheader("Recherche dans les messages")
-    search_text = st.sidebar.text_input("Rechercher des mots dans les messages", key="abuse_search_text")
+    col1, col2 = st.columns(2)
+    with col1:
+        search_text = st.text_input("Rechercher des mots dans les messages", key="abuse_search_text")
+    with col2:
+        # Recherche par ID de chat
+        search_id = st.text_input("Rechercher un chat par ID", key="search_chat_id")
     
-    # Recherche par ID de chat
-    search_id = st.sidebar.text_input("Rechercher un chat par ID", key="search_chat_id")
+    st.divider()
     
     # Appliquer les filtres de base
     filtered_df = df.copy()
@@ -1150,14 +1145,14 @@ def display_abuse_analysis():
         height=400
     )
     
-    # Bouton pour analyser en détail les chats sélectionnés
-    if st.button("Analyser en détail les chats sélectionnés", key="analyze_selected"):
+    # Bouton pour analyser en détail les chatsSelected
+    if st.button("Analyser en détail les chatsSelected", key="analyze_selected"):
         selected_chats = edited_df[edited_df["select"]].copy()
         
         if selected_chats.empty:
             st.warning("Veuillez sélectionner au moins un chat pour l'analyse détaillée.")
         else:
-            st.subheader("Analyse détaillée des chats sélectionnés")
+            st.subheader("Analyse détaillée des chatsSelected")
             
             with st.spinner("Analyse détaillée en cours..."):
                 # Analyser chaque chat sélectionné
@@ -1337,8 +1332,8 @@ def display_abuse_analysis():
                 else:
                     st.warning("Aucun résultat d'analyse détaillée n'a été généré.")
     
-    # Bouton pour générer des rapports pour les chats sélectionnés
-    if st.button("Générer des rapports pour les chats sélectionnés", key="generate_reports_selected"):
+    # Bouton pour générer des rapports pour les chatsSelected
+    if st.button("Générer des rapports pour les chatsSelected", key="generate_reports_selected"):
         selected_chats = edited_df[edited_df["select"]].copy()
     
         if selected_chats.empty:
@@ -1382,45 +1377,18 @@ def display_abuse_analysis():
 def identify_potentially_abusive_chats(df):
     """
     Fonction pour identifier rapidement les chats potentiellement abusifs
-    en utilisant des mots-clés et des patterns simples.
+    en utilisant des mots-clés et des patterns simples optimisés.
     """
     if df.empty:
         return pd.DataFrame()
     
-    # Liste étendue de mots-clés pour la détection préliminaire
-    abuse_keywords = [
-        # Contenu sexuel explicite
-        "sexe", "bite", "penis", "vagin", "masturb", "bander", "sucer", "baiser",
-        "jouir", "éjacul", "ejacul", "orgasm", "porno", "cul", "nichon", "seins",
-        "sexe", "bite", "queue", "pénis", "penis", "zboub", "vagin", "chatte", "cunni",
-        "masturb", "branler", "branlette", "fap", "fellation", "pipe", "sucer",
-        "bander", "gode", "godemichet", "baiser", "ken", "niquer", "niqué", "niquee",
-        "sodom", "sodomie", "anal", "dp", "orgie", "orgasm", "orgasme", "jouir",
-        "gicler", "giclée", "éjacul", "ejacul", "cum", "creampie", "facial", "porno",
-        "porn", "xxx", "cul", "nichon", "nichons", "sein", "seins", "boobs", "boobies",
-        "téton", "tétons", "nipple",
-        
-        # Demandes inappropriées
-        "photo", "nue", "nu", "déshabille", "deshabille", "montre-moi", "montre moi",
-        "caméra", "camera", "vidéo", "video", "snapchat", "instagram", "facebook", 
-        "onlyfans", "strip", "striptease", "strip tease",
-        
-        # Harcèlement et menaces
-        "connard", "salope", "pute", "enculé", "encule", "pd", "tapette", "nègre",
-        "negre", "bougnoule", "suicide", "tuer", "mourir", "crever", "adresse",
-        "menace", "frapper", "battre", "harcèle", "harcele", "stalker",
-        
-        # Comportements suspects
-        "je te surveille", "je sais où tu es", "je sais ou tu es", "je t'observe",
-        "je vais te retrouver", "je connais ton adresse", "donne-moi ton adresse",
-        "donne moi ton adresse", "adresse ip", "ip address", "gps", "géolocalisation",
-        "share location", "send location", "where you live", "gps coordinates",
-        "dox", "doxx", "doxxing", "docx"
-    ]
+    # Utiliser le pattern compilé
+    pattern, abuse_keywords = compile_abuse_patterns()
     
     # Créer une colonne pour indiquer si le chat contient des mots-clés abusifs
-    df['potentially_abusive'] = df['messages'].str.lower().apply(
-        lambda x: any(keyword in str(x).lower() for keyword in abuse_keywords) if not pd.isna(x) else False
+    # Utilisation du pattern compilé pour une recherche plus rapide
+    df['potentially_abusive'] = df['messages'].apply(
+        lambda x: bool(pattern.search(str(x))) if not pd.isna(x) else False
     )
     
     # Filtrer les chats potentiellement abusifs
@@ -1431,7 +1399,8 @@ def identify_potentially_abusive_chats(df):
         if pd.isna(message):
             return 0
         message = str(message).lower()
-        return sum(1 for keyword in abuse_keywords if keyword in message)
+        matches = pattern.findall(message)
+        return len(matches)
     
     potentially_abusive_df['preliminary_score'] = potentially_abusive_df['messages'].apply(count_keywords)
     
@@ -1439,6 +1408,117 @@ def identify_potentially_abusive_chats(df):
     potentially_abusive_df = potentially_abusive_df.sort_values(by='preliminary_score', ascending=False)
     
     return potentially_abusive_df
+
+def generate_chat_report(chat_data):
+    """Génère un rapport HTML pour un chat avec les informations d'antenne et de bénévole."""
+    # Récupérer l'antenne et la localisation du bénévole
+    antenne = chat_data.get('Antenne', 'Inconnue')
+    volunteer_location = chat_data.get('Volunteer_Location', 'Inconnu')
+    
+    html_template = f"""
+<html>
+<head>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 40px; }}
+        .header {{ background-color: #f8f9fa; padding: 20px; border-radius: 5px; }}
+        .chat-info {{ margin: 20px 0; }}
+        .messages {{ white-space: pre-wrap; background-color: white; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>Rapport de Chat Nightline</h2>
+        <p><strong>ID Chat:</strong> {chat_data['id_chat']}</p>
+        <p><strong>IP:</strong> {chat_data['IP']}</p>
+        <p><strong>Date:</strong> {chat_data['Crée le'].strftime('%d/%m/%Y %H:%M')}</p>
+        <p><strong>Antenne:</strong> {antenne}</p>
+        <p><strong>Bénévole:</strong> {volunteer_location}</p>
+    </div>
+    <div class="chat-info">
+        <p><strong>Temps d'attente:</strong> {chat_data['pnd_time'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['pnd_time']) else 'N/A'}</p>
+        <p><strong>Dernier message utilisateur:</strong> {chat_data['last_user_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_user_message']) else 'N/A'}</p>
+        <p><strong>Dernier message opérateur:</strong> {chat_data['last_op_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_op_message']) else 'N/A'}</p>
+    </div>
+    <div class="messages">
+        <h3>Messages:</h3>
+        {chat_data['messages']}
+    </div>
+</body>
+</html>
+"""
+    return html_template
+
+def generate_chat_report_txt(chat_data):
+    """Génère un rapport TXT pour un chat avec les informations d'antenne et de bénévole."""
+    # Récupérer l'antenne et la localisation du bénévole
+    antenne = chat_data.get('Antenne', 'Inconnue')
+    volunteer_location = chat_data.get('Volunteer_Location', 'Inconnu')
+    
+    # Créer le contenu du rapport en format texte
+    txt_content = f"""
+RAPPORT DE CHAT NIGHTLINE
+=========================
+
+ID Chat: {chat_data['id_chat']}
+IP: {chat_data['IP']}
+Date: {chat_data['Crée le'].strftime('%d/%m/%Y %H:%M')}
+Antenne: {antenne}
+Bénévole: {volunteer_location}
+
+INFORMATIONS SUPPLÉMENTAIRES
+===========================
+Temps d'attente: {chat_data['pnd_time'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['pnd_time']) else 'N/A'}
+Dernier message utilisateur: {chat_data['last_user_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_user_message']) else 'N/A'}
+Dernier message opérateur: {chat_data['last_op_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_op_message']) else 'N/A'}
+
+MESSAGES
+========
+{chat_data['messages']}
+"""
+    return txt_content
+
+def generate_chat_report_csv(chat_data):
+    """Génère un rapport CSV pour un chat avec les informations d'antenne et de bénévole."""
+    import io
+    import csv
+    
+    # Récupérer l'antenne et la localisation du bénévole
+    antenne = chat_data.get('Antenne', 'Inconnue')
+    volunteer_location = chat_data.get('Volunteer_Location', 'Inconnu')
+    
+    # Créer un buffer pour stocker les données CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Écrire les en-têtes
+    writer.writerow(['Champ', 'Valeur'])
+    
+    # Écrire les informations du chat
+    writer.writerow(['ID Chat', chat_data['id_chat']])
+    writer.writerow(['IP', chat_data['IP']])
+    writer.writerow(['Date', chat_data['Crée le'].strftime('%d/%m/%Y %H:%M')])
+    writer.writerow(['Antenne', antenne])
+    writer.writerow(['Bénévole', volunteer_location])
+    writer.writerow(['Temps d\'attente', chat_data['pnd_time'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['pnd_time']) else 'N/A'])
+    writer.writerow(['Dernier message utilisateur', chat_data['last_user_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_user_message']) else 'N/A'])
+    writer.writerow(['Dernier message opérateur', chat_data['last_op_message'].strftime('%d/%m/%Y %H:%M') if pd.notnull(chat_data['last_op_message']) else 'N/A'])
+    
+    # Ajouter une ligne vide
+    writer.writerow([])
+    
+    # Écrire les messages
+    writer.writerow(['MESSAGES'])
+    
+    # Diviser les messages par ligne et les écrire
+    messages = str(chat_data['messages']).split('\n')
+    for message in messages:
+        writer.writerow([message])
+    
+    # Récupérer le contenu du buffer
+    csv_content = output.getvalue()
+    output.close()
+    
+    return csv_content
 
 def extract_user_messages(messages):
     """Extrait les messages de l'utilisateur d'une conversation."""
@@ -1707,8 +1787,7 @@ def main():
     
     st.title("Dashboard GASAS")
     
-    # Ajouter un bouton de rafraîchissement manuel
-    if st.sidebar.button("🔄 Rafraîchir les données", key="refresh_button"):
+    if st.sidebar.button("🔄 Rafraîchir", key="refresh_button"):
         # Effacer le cache des données
         if 'chat_data' in st.session_state:
             del st.session_state['chat_data']
@@ -1716,6 +1795,8 @@ def main():
             del st.session_state['calls_data']
         if 'abuse_analysis_results' in st.session_state:
             del st.session_state['abuse_analysis_results']
+        if 'initial_load' in st.session_state:
+            del st.session_state['initial_load']
         st.rerun()
     
     # Ajouter le bouton de déconnexion
@@ -1725,14 +1806,11 @@ def main():
             del st.session_state[key]
         st.rerun()
     
-    # Créer les onglets
-    tab1, tab2, tab3 = st.tabs(["Chats", "Appels", "Analyse IA des abus"])
+    tab1, tab2 = st.tabs(["Appels", "Analyse IA des abus"])
     
     with tab1:
-        display_chats()
-    with tab2:
         display_calls()
-    with tab3:
+    with tab2:
         display_abuse_analysis()
 
 if __name__ == "__main__":
