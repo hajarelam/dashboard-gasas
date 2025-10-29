@@ -401,7 +401,7 @@ def get_ksaar_data(force_refresh=False):
                         "sort": "-createdAt"  # Tri par date décroissante
                     }
 
-                    response = requests.get(url, params=params, auth=auth)
+                    response = requests.get(url, params=params, auth=auth, timeout=30)
                     
                     if response.status_code == 200:
                         data = response.json()
@@ -1823,5 +1823,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
