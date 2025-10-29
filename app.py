@@ -1,6 +1,6 @@
 import streamlit as st
 
-# ───────── Page config (doit être la 1ère commande Streamlit) ─────────
+# ───────── Page config ─────────
 CONFIG_LOADED = False
 CONFIG_ERROR = None
 try:
@@ -27,8 +27,6 @@ from urllib3.util.retry import Retry
 from datetime import datetime, timedelta, timezone
 import pytz
 import re
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
 TZ_PARIS = pytz.timezone("Europe/Paris")
 
@@ -43,7 +41,7 @@ def make_session():
 # ───────── Utils dates ─────────
 def to_paris(dt_utc: pd.Timestamp) -> pd.Timestamp:
     if pd.isna(dt_utc): return pd.NaT
-    if dt_utc.tzinfo is None:  # si par mégarde on reçoit une naïve
+    if dt_utc.tzinfo is None:
         dt_utc = dt_utc.tz_localize(timezone.utc)
     return dt_utc.tz_convert(TZ_PARIS)
 
@@ -54,23 +52,24 @@ def month_bounds_paris_today():
         next_paris = first_paris.replace(year=first_paris.year+1, month=1)
     else:
         next_paris = first_paris.replace(month=first_paris.month+1)
-    # Bornes UTC tz-aware pour comparer avec les timestamps API (UTC)
     return first_paris.astimezone(timezone.utc), next_paris.astimezone(timezone.utc)
 
 # ───────── Abus regex ─────────
 @st.cache_resource
 def compile_abuse_patterns():
-    kws = ["sexe","bite","penis","vagin","masturb","bander","sucer","baiser","jouir","éjacul","ejacul","orgasm",
-           "porno","cul","nichon","seins","queue","pénis","zboub","chatte","cunni","branler","branlette","fap",
-           "fellation","pipe","gode","godemichet","ken","niquer","niqué","niquee","sodom","sodomie","anal","dp",
-           "orgie","orgasme","gicler","giclée","cum","creampie","facial","porn","xxx","nichons","sein","boobs",
-           "boobies","téton","tétons","nipple","nue","nu","déshabille","deshabille","montre-moi","montre moi",
-           "caméra","camera","vidéo","video","snapchat","instagram","facebook","onlyfans","strip","striptease",
-           "strip tease","connard","salope","pute","enculé","encule","pd","tapette","nègre","negre","bougnoule",
-           "suicide","tuer","mourir","crever","adresse","menace","frapper","battre","harcèle","harcele","stalker"]
+    kws = [
+        "sexe","bite","penis","vagin","masturb","bander","sucer","baiser","jouir","éjacul","ejacul","orgasm",
+        "porno","cul","nichon","seins","queue","pénis","zboub","chatte","cunni","branler","branlette","fap",
+        "fellation","pipe","gode","godemichet","ken","niquer","niqué","niquee","sodom","sodomie","anal","dp",
+        "orgie","orgasme","gicler","giclée","cum","creampie","facial","porn","xxx","nichons","sein","boobs",
+        "boobies","téton","tétons","nipple","nue","nu","déshabille","deshabille","montre-moi","montre moi",
+        "caméra","camera","vidéo","video","snapchat","instagram","facebook","onlyfans","strip","striptease",
+        "strip tease","connard","salope","pute","enculé","encule","pd","tapette","nègre","negre","bougnoule",
+        "suicide","tuer","mourir","crever","adresse","menace","frapper","battre","harcèle","harcele","stalker"
+    ]
     return re.compile('|'.join(map(re.escape, kws)), re.IGNORECASE)
 
-# ───────── Mappings opérateurs/antennes (inchangé) ─────────
+# ───────── Mappings opérateurs/antennes ─────────
 def get_operator_name(operator_id):
     if pd.isna(operator_id) or operator_id is None: return "Inconnu"
     try: operator_id = int(operator_id)
@@ -135,11 +134,10 @@ def get_normalized_antenne(a):
     if s.startswith("Nightline "): return s.replace("Nightline ", "")
     return s
 
-# ───────── API Ksaar – Chats (UTC tz-aware) ─────────
+# ───────── Chats Ksaar ─────────
 def _rows_to_df_chat(rows):
     if not rows: return pd.DataFrame()
     df = pd.DataFrame(rows)
-    # parse tz-aware UTC, puis garde en UTC ici; on convertira à l’affichage
     for col in ['Crée le','Modifié le','pnd_time','last_user_message','last_op_message']:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce', utc=True)
@@ -148,7 +146,7 @@ def _rows_to_df_chat(rows):
 @st.cache_data(ttl=3600)
 def get_ksaar_data_incremental(max_pages: int = 5):
     try:
-        wf = "1500d159-5185-4487-be1f-fa18c6c85ec5"
+        wf = "1500d159-5185-4487-be1f-fa18c6c85ec5"  # CHATS
         url = f"{ksaar_config['api_base_url']}/v1/workflows/{wf}/records"
         auth = (ksaar_config['api_key_name'], ksaar_config['api_key_password'])
         s = make_session()
@@ -186,10 +184,9 @@ def get_ksaar_data_incremental(max_pages: int = 5):
 
 @st.cache_data(ttl=3600)
 def get_ksaar_data_month_current():
-    """Charge tout le mois courant (bornes Europe/Paris, comparées en UTC tz-aware)."""
     try:
         start_utc, end_utc = month_bounds_paris_today()
-        wf = "1500d159-5185-4487-be1f-fa18c6c85ec5"
+        wf = "1500d159-5185-4487-be1f-fa18c6c85ec5"  # CHATS
         url = f"{ksaar_config['api_base_url']}/v1/workflows/{wf}/records"
         auth = (ksaar_config['api_key_name'], ksaar_config['api_key_password'])
         s = make_session()
@@ -200,11 +197,9 @@ def get_ksaar_data_month_current():
             data = r.json(); recs = data.get('results', [])
             if not recs: break
 
-            # bornage page (UTC tz-aware)
             created = pd.to_datetime([rec.get('createdAt') for rec in recs], errors='coerce', utc=True)
             if created.notna().all():
                 newest = created.max(); oldest = created.min()
-                # si toute la page < début du mois → stop
                 if newest < start_utc and oldest < start_utc:
                     break
 
@@ -232,7 +227,6 @@ def get_ksaar_data_month_current():
                     row['Antenne'] = get_normalized_antenne(ant)
                     rows.append(row)
 
-            # si le plus récent de la page < début du mois → stop
             if created.notna().any() and created.max() < start_utc:
                 break
 
@@ -243,6 +237,82 @@ def get_ksaar_data_month_current():
         return _rows_to_df_chat(rows)
     except Exception as e:
         st.error(f"Erreur Ksaar (mois): {e}")
+        return pd.DataFrame()
+
+# ───────── Appels Ksaar ─────────
+def _rows_to_df_calls(rows):
+    if not rows: return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    if 'Crée le' in df.columns:
+        df['Crée le'] = pd.to_datetime(df['Crée le'], errors='coerce', utc=True)
+    return df
+
+def get_antenne_from_dst(dst):
+    if pd.isna(dst) or dst is None or dst == "": return None
+    dst_str = str(dst).strip().replace("+", "").replace(".0", "").replace(" ", "")
+    if dst_str in ["33999011163","33999011065"]: return "Lille"
+    if dst_str in ["33999011073"]: return "Marseille"
+    if dst_str in ["33999011198","33999011066"]: return "Lyon"
+    if dst_str in ["33999011201","33999011068"]: return "Paris"
+    if dst_str in ["33999011263","33999011072"]: return "Toulouse"
+    if dst_str in ["33999011261","33999011070"]: return "Reims"
+    if dst_str in ["33999011199","33999011067"]: return "Normandie"
+    if dst_str in ["33999011074"]: return "National_Fr_Hors_Zone"
+    if dst_str in ["33999011262","33999011071"]: return "Saclay"
+    if dst_str in ["33999011215","33999011069"]: return "Pays de la Loire"
+    return None
+
+@st.cache_data(ttl=3600)
+def get_calls_data_all():
+    """Récupère TOUTES les pages d'appels (tu filtres ensuite dans l'UI)."""
+    try:
+        wf = "deb92463-c3a5-4393-a3bf-1dd29a022cfe"  # APPELS
+        url = f"{ksaar_config['api_base_url']}/v1/workflows/{wf}/records"
+        auth = (ksaar_config['api_key_name'], ksaar_config['api_key_password'])
+        s = make_session()
+        rows, page = [], 1
+        while True:
+            r = s.get(url, params={"page":page,"limit":100,"sort":"-createdAt"}, auth=auth, timeout=20)
+            if r.status_code != 200: break
+            data = r.json(); recs = data.get('results', [])
+            if not recs: break
+            for rec in recs:
+                dst = rec.get('dst','')
+                row = {
+                    'Crée le': rec.get('createdAt'),
+                    'Nom': rec.get('from_name',''),
+                    'Numéro': rec.get('from_number',''),
+                    'Statut': rec.get('disposition',''),
+                    'Code_de_cloture': rec.get('Code_de_cloture',''),
+                    'answer': rec.get('answer'),
+                    'end': rec.get('end'),
+                    'dst': dst
+                }
+                ant_dst = get_antenne_from_dst(dst)
+                if ant_dst:
+                    row['Antenne'] = ant_dst
+                elif rec.get('from_name'):
+                    row['Antenne'] = get_normalized_antenne(rec.get('from_name'))
+                else:
+                    row['Antenne'] = "Inconnue"
+                rows.append(row)
+            last_page = data.get('lastPage', page)
+            if page >= last_page: break
+            page += 1
+        df = _rows_to_df_calls(rows)
+        # Ajout colonnes heure lisibles
+        if not df.empty:
+            def extract_hhmm(ts):
+                if pd.isna(ts): return None
+                dt = pd.to_datetime(ts, errors='coerce', utc=True)
+                if pd.isna(dt): return None
+                return to_paris(dt).strftime('%H:%M')
+            df['Début appel'] = df['answer'].apply(extract_hhmm)
+            df['Fin appel']   = df['end'].apply(extract_hhmm)
+            df.drop(columns=['answer','end'], inplace=True)
+        return df
+    except Exception as e:
+        st.error(f"Erreur Ksaar (appels): {e}")
         return pd.DataFrame()
 
 # ───────── Détection abus simple ─────────
@@ -256,7 +326,7 @@ def identify_potentially_abusive_chats(df: pd.DataFrame) -> pd.DataFrame:
     out['preliminary_score'] = out['messages'].apply(lambda x: len(pat.findall(str(x))) if pd.notna(x) else 0)
     return out.sort_values('preliminary_score', ascending=False)
 
-# ───────── Auth simple ─────────
+# ───────── Auth ─────────
 def check_password():
     if st.session_state.get('authenticated'): return True
     st.title("Login")
@@ -272,36 +342,100 @@ def check_password():
                 st.error("😕 Identifiants incorrects")
     return False
 
-# ───────── UI : Analyse IA (auto-load mois en cours) ─────────
+# ───────── UI : Appels ─────────
+def display_calls():
+    st.subheader("Appels")
+    df = get_calls_data_all()
+    if df.empty:
+        st.info("Aucune donnée d’appel récupérée.")
+        return
+
+    # conversions fuseau pour filtrage/affichage
+    df = df.copy()
+    df['Crée le'] = df['Crée le'].apply(to_paris)
+
+    # Filtres
+    c1, c2 = st.columns(2)
+    with c1:
+        start_date = st.date_input("Date de début", value=df['Crée le'].dt.date.min(), key="calls_start_date")
+        start_time = st.time_input("Heure de début", value=datetime.strptime('00:00','%H:%M').time(), key="calls_start_time")
+    with c2:
+        end_date = st.date_input("Date de fin", value=df['Crée le'].dt.date.max(), key="calls_end_date")
+        end_time = st.time_input("Heure de fin", value=datetime.strptime('23:59','%H:%M').time(), key="calls_end_time")
+
+    colA, colB = st.columns(2)
+    with colA:
+        statuts = sorted(df['Statut'].dropna().unique().tolist())
+        sel_stat = st.multiselect("Statut", options=statuts, default=statuts, key="calls_statut")
+    with colB:
+        codes = sorted(df['Code_de_cloture'].fillna('(vide)').unique().tolist())
+        sel_code = st.multiselect("Code de clôture", options=codes, default=codes, key="calls_codes")
+
+    # masque
+    tmp = df.copy()
+    mask = (tmp['Crée le'].dt.date >= start_date) & (tmp['Crée le'].dt.date <= end_date)
+    t = tmp['Crée le'].dt.time
+    if start_time > end_time:
+        mask &= (t >= start_time) | (t <= end_time)
+    else:
+        mask &= (t >= start_time) & (t <= end_time)
+
+    if sel_stat:
+        mask &= tmp['Statut'].isin(sel_stat)
+    if sel_code:
+        mask &= tmp['Code_de_cloture'].fillna('(vide)').isin(sel_code)
+
+    f = tmp[mask].copy()
+
+    k1,k2,k3 = st.columns(3)
+    with k1: st.metric("Nombre d'appels", len(f))
+    with k2: st.metric("Période", f"{start_date.strftime('%d/%m/%Y')} → {end_date.strftime('%d/%m/%Y')}")
+    with k3: st.metric("Plage horaire", f"{start_time.strftime('%H:%M')}–{end_time.strftime('%H:%M')}")
+
+    # Table
+    if not f.empty:
+        f_display = f[['Crée le','Antenne','Numéro','Statut','Code_de_cloture','Début appel','Fin appel']].copy()
+        st.dataframe(
+            f_display.sort_values('Crée le', ascending=False),
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.warning("Aucun appel avec ces filtres.")
+
+# ───────── UI : Analyse IA ─────────
 def display_abuse_analysis():
     st.title("Analyse IA des chats potentiellement abusifs")
 
-    # 1) Essayer automatiquement le MOIS EN COURS
-    df = get_ksaar_data_month_current()
-
-    # 2) Fallback automatique si vide → incrémental 5 pages
+    # 1) Mois en cours
+    df_month = get_ksaar_data_month_current()
+    # 2) Fallback auto + fusion si nécessaire
+    df = df_month
     if df.empty:
-        df = get_ksaar_data_incremental(max_pages=5)
+        df_inc = get_ksaar_data_incremental(max_pages=10)
+        df = df_inc
 
     if df.empty:
-        st.warning("Aucune donnée de chat disponible.")
+        st.warning("Aucune donnée de chat disponible (mois + incrémental).")
+        with st.expander("Diagnostic rapide"):
+            st.write("- Vérifie les **secrets** (api_base_url, api_key_name, api_key_password).")
+            st.write("- Vérifie le **Workflow ID chats**: 1500d159-5185-4487-be1f-fa18c6c85ec5.")
         return
 
-    # Convertir les dates en Europe/Paris pour l’affichage et les filtres
+    # fuseau Paris pour l’UI
     df = df.copy()
     for c in ['Crée le','Modifié le','pnd_time','last_user_message','last_op_message']:
-        if c in df.columns:
-            df[c] = df[c].apply(to_paris)
+        if c in df.columns: df[c] = df[c].apply(to_paris)
 
-    # Filtres minimalistes (aucun bouton de mode)
+    # Filtres minimalistes
     c1, c2 = st.columns(2)
     with c1:
-        # Par défaut : depuis le 1er du mois courant (Paris)
-        default_start = datetime.now(TZ_PARIS).replace(day=1, hour=0, minute=0, second=0, microsecond=0).date()
+        default_start = (df['Crée le'].min() or datetime.now(TZ_PARIS)).date()
         start_date = st.date_input("Date de début", value=default_start, key="abuse_start_date")
         start_time = st.time_input("Heure de début", value=datetime.strptime('00:00','%H:%M').time(), key="abuse_start_time")
     with c2:
-        end_date = st.date_input("Date de fin", value=datetime.now(TZ_PARIS).date(), key="abuse_end_date")
+        default_end = (df['Crée le'].max() or datetime.now(TZ_PARIS)).date()
+        end_date = st.date_input("Date de fin", value=default_end, key="abuse_end_date")
         end_time = st.time_input("Heure de fin", value=datetime.strptime('23:59','%H:%M').time(), key="abuse_end_time")
 
     c3, c4 = st.columns(2)
@@ -314,16 +448,15 @@ def display_abuse_analysis():
 
     search_text = st.text_input("Rechercher dans les messages", key="abuse_search_text")
 
-    # Mask sur dates/heures (en Paris)
+    # filtre
     tmp = df.copy()
     mask = (tmp['Crée le'].dt.date >= start_date) & (tmp['Crée le'].dt.date <= end_date)
 
-    # Heures avec overnight
-    tmp['time_obj'] = tmp['Crée le'].dt.time
+    t = tmp['Crée le'].dt.time
     if start_time > end_time:
-        mask &= (tmp['time_obj'] >= start_time) | (tmp['time_obj'] <= end_time)
+        mask &= (t >= start_time) | (t <= end_time)
     else:
-        mask &= (tmp['time_obj'] >= start_time) & (tmp['time_obj'] <= end_time)
+        mask &= (t >= start_time) & (t <= end_time)
 
     if 'Toutes' not in sel_ant and sel_ant:
         mask &= tmp['Antenne'].isin(sel_ant)
@@ -332,7 +465,7 @@ def display_abuse_analysis():
     if search_text:
         mask &= tmp['messages'].str.contains(search_text, case=False, na=False)
 
-    filtered_df = tmp[mask].drop(columns=['time_obj'])
+    filtered_df = tmp[mask].copy()
 
     k1,k2,k3 = st.columns(3)
     with k1: st.metric("Nombre de chats", len(filtered_df))
@@ -363,24 +496,38 @@ def display_abuse_analysis():
             key="abuse_data_editor"
         )
 
-    # Bouton unique pour étendre l’historique (optionnel)
     if st.button("🔽 Charger plus d’historique", key="abuse_load_more"):
-        # On étend l’incrémental de 5 pages et on fusionne avec le mois
-        inc = get_ksaar_data_incremental(max_pages=10)
-        if not inc.empty:
-            # harmoniser au fuseau Paris
+        more = get_ksaar_data_incremental(max_pages=20)
+        if not more.empty:
             for c in ['Crée le','Modifié le','pnd_time','last_user_message','last_op_message']:
-                if c in inc.columns: inc[c] = inc[c].apply(to_paris)
-            merged = pd.concat([df, inc], ignore_index=True).drop_duplicates(subset=['id_chat','Crée le'])
-            # Remplacer df source en mémoire vive locale de la fonction
-            st.session_state['abuse_merged_df'] = merged
-            st.success("Historique étendu chargé. Ajuste tes filtres si besoin.")
+                if c in more.columns: more[c] = more[c].apply(to_paris)
+            st.session_state['abuse_cached_more'] = pd.concat([df, more], ignore_index=True)\
+                                                     .drop_duplicates(subset=['id_chat','Crée le'])
+            st.success("Historique étendu chargé. Ajuste les filtres si besoin.")
             st.rerun()
+        else:
+            st.info("Pas plus d’historique disponible.")
 
-# ───────── UI : Appels (inchangé fonctionnellement, avec clés uniques) ─────────
-def display_calls():
-    st.subheader("Appels (bref)")
-    st.caption("Section conservée, non liée à ton bug actuel.")
+# ───────── Debug panel ─────────
+def debug_panel():
+    with st.expander("🔧 Debug / Secrets / API", expanded=False):
+        st.write(f"API Base URL: `{ksaar_config.get('api_base_url','')}`")
+        st.write(f"API Key Name configuré: {'Oui' if ksaar_config.get('api_key_name') else 'Non'}")
+        st.write(f"API Key Password configuré: {'Oui' if ksaar_config.get('api_key_password') else 'Non'}")
+        if st.button("🧪 Tester connexion (Chats)", key="test_api_chats"):
+            try:
+                wf = "1500d159-5185-4487-be1f-fa18c6c85ec5"
+                url = f"{ksaar_config['api_base_url']}/v1/workflows/{wf}/records"
+                auth = (ksaar_config['api_key_name'], ksaar_config['api_key_password'])
+                r = requests.get(url, params={"page":1,"limit":1}, auth=auth, timeout=10)
+                st.write(f"Status: {r.status_code}")
+                if r.ok:
+                    st.success("OK")
+                    st.json(r.json())
+                else:
+                    st.error(r.text[:500])
+            except Exception as e:
+                st.error(str(e))
 
 # ───────── Main ─────────
 def main():
@@ -413,6 +560,7 @@ initial_sidebar_state = "expanded"
         for k in list(st.session_state.keys()):
             if k not in ("authenticated","username"):
                 del st.session_state[k]
+        get_calls_data_all.clear()
         get_ksaar_data_month_current.clear()
         get_ksaar_data_incremental.clear()
         st.rerun()
@@ -420,6 +568,8 @@ initial_sidebar_state = "expanded"
     if st.sidebar.button("🚪 Déconnexion", key="logout_btn"):
         for k in list(st.session_state.keys()): del st.session_state[k]
         st.rerun()
+
+    debug_panel()
 
     tab1, tab2 = st.tabs(["Appels", "Analyse IA des abus"])
     with tab1:
