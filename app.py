@@ -316,10 +316,11 @@ def get_antenne_from_dst(dst):
 # CHARGEMENT DES DONNÉES
 # ==========================
 
-@st.cache_data(ttl=300)  # 5 minutes
+@st.cache_data(ttl=300)
 def get_ksaar_chats():
     """Récupère les chats + pré-calcul des flags abusifs."""
     if not ksaar_config.get("api_base_url"):
+        st.error("API base URL non configurée (secrets.ksaar_config.api_base_url manquant).")
         return pd.DataFrame()
 
     workflow_id = "1500d159-5185-4487-be1f-fa18c6c85ec5"  # chats
@@ -334,15 +335,22 @@ def get_ksaar_chats():
         params = {"page": current_page, "limit": 100, "sort": "-createdAt"}
         try:
             resp = requests.get(url, params=params, auth=auth, timeout=30)
-        except Exception:
+        except Exception as e:
+            st.error(f"Erreur de connexion à l'API Chats : {e}")
             break
 
         if resp.status_code != 200:
+            st.error(f"Erreur API Chats (status {resp.status_code}) pour la page {current_page}")
+            try:
+                st.text(f"Réponse brute : {resp.text[:500]}")
+            except Exception:
+                pass
             break
 
         data = resp.json()
         records = data.get("results", [])
         if not records:
+            # st.info(f"Aucun enregistrement de chat pour la page {current_page}.")
             break
 
         for record in records:
@@ -373,6 +381,7 @@ def get_ksaar_chats():
         current_page += 1
 
     if not all_records:
+        st.warning("Ksaar : la requête Chats a réussi mais aucun enregistrement n'a été retourné.")
         return pd.DataFrame()
 
     df = pd.DataFrame(all_records)
@@ -384,7 +393,6 @@ def get_ksaar_chats():
     df["messages"] = df["messages"].astype(str)
     df["messages_lower"] = df["messages"].str.lower()
 
-    # pré-calcul abus
     def is_abusive(text: str) -> bool:
         if not text:
             return False
@@ -403,10 +411,12 @@ def get_ksaar_chats():
     return df
 
 
+
 @st.cache_data(ttl=600)
 def get_ksaar_calls():
     """Récupère les appels."""
     if not ksaar_config.get("api_base_url"):
+        st.error("API base URL non configurée (secrets.ksaar_config.api_base_url manquant).")
         return pd.DataFrame()
 
     workflow_id = "deb92463-c3a5-4393-a3bf-1dd29a022cfe"  # appels
@@ -429,15 +439,22 @@ def get_ksaar_calls():
         params = {"page": current_page, "limit": 100}
         try:
             resp = requests.get(url, params=params, auth=auth, timeout=30)
-        except Exception:
+        except Exception as e:
+            st.error(f"Erreur de connexion à l'API Appels : {e}")
             break
 
         if resp.status_code != 200:
+            st.error(f"Erreur API Appels (status {resp.status_code}) pour la page {current_page}")
+            try:
+                st.text(f"Réponse brute : {resp.text[:500]}")
+            except Exception:
+                pass
             break
 
         data = resp.json()
         records = data.get("results", [])
         if not records:
+            # st.info(f"Aucun enregistrement d'appel pour la page {current_page}.")
             break
 
         for record in records:
@@ -468,11 +485,15 @@ def get_ksaar_calls():
         current_page += 1
 
     if not all_records:
+        st.warning("Ksaar : la requête Appels a réussi mais aucun enregistrement n'a été retourné.")
         return pd.DataFrame()
 
     df = pd.DataFrame(all_records)
     df["Crée le"] = pd.to_datetime(df["Crée le"], errors="coerce")
-    df = df[df["Crée le"] >= "2025-01-01"]
+
+    # ⚠️ TEMPORAIREMENT : on enlève le filtre sur 2025
+    # df = df[df["Crée le"] >= "2025-01-01"]
+
     return df
 
 
